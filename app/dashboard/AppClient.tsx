@@ -1473,6 +1473,10 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
   const esGerReal = esGerenciaReal(user)
   const puedeRolPrivilegiado = tieneCapacidad(user, 'gestionar_usuarios_roles')
   const [grupoRol, setGrupoRol] = useState<'vigiladores' | 'supervisores' | 'administracion'>('vigiladores')
+  // Buscador (JC 16/11): nombre, apellido, DNI, CUIL, legajo, email o celular.
+  // Mientras hay algo escrito busca en TODOS los grupos, para no tener que
+  // adivinar en qué solapa está la persona.
+  const [busquedaGuardias, setBusquedaGuardias] = useState('')
   // Desempeno vive aca, dentro de Guardias/Empleados: es otra forma de mirar a
   // la misma gente, no una aplicacion aparte.
   const [vista, setVista] = useState<'empleados' | 'desempeno' | 'gerencia'>('empleados')
@@ -2066,10 +2070,25 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
   for (const g of guardias as Usuario[]) conteoGrupos[grupoDe(g)] += 1
 
   const idsFiltroGuardias = new Set((filtroActivo?.ids ?? []) as string[])
+  const normalizarBusqueda = (t: unknown) => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  const terminosBusqueda = normalizarBusqueda(busquedaGuardias).split(/\s+/).filter(Boolean)
+  const buscando = terminosBusqueda.length > 0
+  const coincideBusqueda = (g: Usuario) => {
+    const campos = [g.nombre, g.apellido, g.dni, g.cuil, g.legajo, (g as any).legajo_visual, g.email, (g as any).telefono]
+    const texto = normalizarBusqueda(campos.join(' '))
+    // DNI/CUIL con o sin puntos y guiones: "36.499.140" o "20-36499140-2".
+    const soloNumeros = campos.map(c => String(c ?? '').replace(/\D/g, '')).join(' ')
+    return terminosBusqueda.every(t => {
+      if (texto.includes(t)) return true
+      const num = t.replace(/[.\-]/g, '')
+      return /^\d+$/.test(num) && soloNumeros.includes(num)
+    })
+  }
   const guardiasFiltrados = guardias.filter((g: Usuario) => {
     // Un enlace que pide ids concretos manda: si vino de otra pantalla a ver a
     // alguien, no se lo esconde porque este en otra solapa.
     if (idsFiltroGuardias.size > 0) return idsFiltroGuardias.has(g.id)
+    if (buscando) return coincideBusqueda(g)
     if (grupoDe(g) !== grupoRol) return false
     if (filtroActivo?.tipo === 'activos') return g.estado === 'activo'
     return true
@@ -2197,6 +2216,26 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         {conmutadorVista}
 
       {idsFiltroGuardias.size === 0 && (
+          <div style={{ position:'relative', marginBottom:12, maxWidth:460 }}>
+            <span aria-hidden style={{ position:'absolute', left:12, top:21, transform:'translateY(-50%)', fontSize:15, opacity:0.7, pointerEvents:'none' }}>🔍</span>
+            <input
+              type="search"
+              value={busquedaGuardias}
+              onChange={e => setBusquedaGuardias(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Escape') setBusquedaGuardias('') }}
+              placeholder="Buscar por nombre, apellido, DNI, CUIL, legajo o email"
+              aria-label="Buscar empleados"
+              autoComplete="off"
+              style={{ ...S.input, width:'100%', boxSizing:'border-box', paddingLeft:38 }}
+            />
+            {buscando && (
+              <div style={{ fontSize:12, color:'#94a3b8', marginTop:6 }}>
+                {guardiasFiltrados.length === 0 ? 'Nadie coincide con la búsqueda.' : `${guardiasFiltrados.length} resultado${guardiasFiltrados.length === 1 ? '' : 's'} en todos los grupos`}
+              </div>
+            )}
+          </div>
+        )}
+      {idsFiltroGuardias.size === 0 && !buscando && (
           <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap' }}>
             {([
               { id:'vigiladores' as const,    texto:'Vigiladores' },
@@ -2228,7 +2267,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
               {/* El rol solo se muestra donde distingue algo. En la lista de
                   vigiladores decia "guardia" en las 75 filas: una columna que
                   repite el filtro que ya elegiste no informa, ocupa. */}
-              {grupoRol !== 'vigiladores' && <th style={S.th}>Rol</th>}
+              {(buscando || grupoRol !== 'vigiladores') && <th style={S.th}>Rol</th>}
               {esAdmin && <th style={S.th}>Cumplimiento operativo</th>}
               <th style={S.th}>Estado</th>
               <th style={S.th}>Acceso</th>
@@ -2250,7 +2289,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
                   </span>
                 </td>
                 <td style={{ ...S.td, maxWidth:180, wordBreak:'break-word' }}>{g.email || '—'}</td>
-                {grupoRol !== 'vigiladores' && <td style={S.td}>{g.rol}</td>}
+                {(buscando || grupoRol !== 'vigiladores') && <td style={S.td}>{g.rol}</td>}
                 {esAdmin && (
                   <td style={S.td}>
                     <CeldaCumplimiento
