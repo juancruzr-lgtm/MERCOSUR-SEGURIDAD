@@ -258,8 +258,40 @@ Resultados locales: **27/27** pruebas Vitest y **27/27** controles SQL en PGlite
 zona, idempotencia, conflicto de versión, comunicar no resuelve, verificación que reabre, aprobación de reglas
 sólo por Gerencia, rollback y reaplicación). `tsc` sin errores nuevos en estos archivos.
 
-**Falta (siguiente etapa, después de las decisiones):** pantalla React (`TableroGerenciaPanel`) conectada al menú
-detrás de `NEXT_PUBLIC_TABLERO_GERENCIA`, cargador de casos desde las fuentes existentes, ruta de envío autorizado.
+### 6.1 Pantalla (segunda entrega, 16/11/2026)
+
+| Archivo | Qué es |
+|---|---|
+| `components/tablero-gerencia/TableroGerenciaPanel.tsx` | Pantalla: filtros (mes, cliente, objetivo, empleado, supervisor, zona, estado), fila "Requiere acción", fila "Operación del mes", fila "Horas y facturación" (económico sólo con `ver_dashboard_gerencial`), lista de casos con detalle desplegable (evidencia, intervenciones anteriores, plazo, regla), selección múltiple y vista previa de mensajes |
+| `lib/tablero-gerencia/fuentes.ts` | Arma los casos desde las tablas existentes con el **mismo detector de Revisión Operativa** (`detectarAlertasOperativas`) + turnos terminados sin entrada, `ronda_alertas`, `salidas_anticipadas` y última supervisión. El estado sale de las intervenciones ya registradas; si existe `gestion_casos`, el caso guardado manda |
+| `lib/tablero-gerencia/cargar.ts` | Carga **sólo lectura**, paginada (tope de 1.000 filas de PostgREST) y por lotes; detecta si la migración de casos existe |
+| `app/dashboard/AppClient.tsx` | +14 líneas: ítem "Tablero de Gerencia" en GENERAL y su render, **ambos** condicionados a `NEXT_PUBLIC_TABLERO_GERENCIA=1` y alcance operativo |
+| `tests/tablero-gerencia-fuentes.test.ts` | 8 pruebas del armado de casos |
+
+**Comportamiento con el interruptor encendido:**
+- Clic en un indicador → lista de los casos que lo forman, ordenada por vencidos y gravedad.
+- Selección de uno o varios → **Pedir explicación al vigilador** / **Avisar al supervisor**: un mensaje por persona,
+  plantilla según el tipo de caso, variables editables, vista previa del texto exacto, teléfono normalizado, quién
+  queda excluido y por qué, y los bloqueos. El botón de envío queda deshabilitado (envío apagado + plantillas sin
+  aprobar en Meta). Con varios casos por persona, cada variable lista los casos en el mismo orden ("A / B").
+- Revisar / Asignar / Registrar respuesta / Marcar resuelto / Verificar: visibles pero deshabilitados, con el motivo,
+  hasta aprobar la migración. Intervenir sobre el hecho sigue en Revisión Operativa.
+- Supervisor: ve sólo los objetivos de sus zonas (fail-closed), sin fila económica.
+- "Sin fichaje" del mes incluye turnos **ya terminados** sin ninguna entrada (Revisión Operativa sólo alerta mientras
+  el turno está en curso). Es indicador de gestión, no alerta en vivo.
+- Horas: el mes en curso se compara con el anterior **al mismo día**; el mes cerrado, contra el mes completo.
+
+**Probado:** 35/35 pruebas Vitest; la pantalla se recorrió en el navegador con datos ficticios (indicador → casos →
+selección → vista previa al vigilador y al supervisor), sin ninguna solicitud de red fuera de la máquina.
+**No probado contra la base real:** no hay `.env` local y no se usaron credenciales de producción. Además, el
+`node_modules` del repo principal está incompleto (faltan los builds de React/React-DOM), por eso `next dev` no arranca
+en esta PC; conviene reinstalar dependencias (`npm ci`) antes de probarlo con datos reales.
+
+**Para verlo con datos reales (cuando lo autorices):** en un entorno de prueba o preview de Vercel, definir
+`NEXT_PUBLIC_TABLERO_GERENCIA=1`. Es sólo lectura: no requiere la migración. Sin la variable, nada cambia para nadie.
+
+**Falta:** ruta de envío autorizado (después de Meta y la migración) y conectar los botones de acción a
+`gestion_caso_accion`.
 
 ---
 
