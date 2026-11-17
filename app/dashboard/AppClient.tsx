@@ -14372,6 +14372,7 @@ const esGuardia = esRolGuardia(user.rol)
                   turnos={turnos}
                   guardias={guardias}
                   supervisiones={supervisionesAdmin}
+                  usuario={user}
                   onObjetivoActualizado={(actualizado: any) =>
                     setObjetivos((prev: any[]) => prev.map(o => o.id === actualizado.id ? { ...o, ...actualizado } : o))
                   }

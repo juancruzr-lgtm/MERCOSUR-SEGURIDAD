@@ -58,6 +58,11 @@ import { actualizarPunto, aplicarSugerenciaGps, diagnosticarGpsPunto } from '@/l
 import type { MarcacionCGO, MarkerCGO, ObjetivoCGO, PuntoRondaCGO, SupervisionCGO } from './MapaOperativo'
 import PanelDetalle, { type SeleccionGps } from './PanelDetalle'
 import styles from './Gps.module.css'
+import { puedeGestionarVehiculosSupervision, puedeVerVehiculosSupervision } from '@/lib/gps-vehiculos/permisos'
+import type { SujetoAcceso } from '@/lib/capacidades'
+
+// Sección aparte (Smart Tags): no se mezcla con las capas de evidencia del mapa operativo.
+const VehiculosSupervision = dynamic(() => import('./VehiculosSupervision'), { ssr: false })
 
 const MapaOperativo = dynamic(() => import('./MapaOperativo'), {
   ssr: false,
@@ -115,6 +120,7 @@ export default function PaginaGps({
   guardias,
   supervisiones,
   onObjetivoActualizado,
+  usuario,
 }: {
   objetivos: Objetivo[]
   registros: RegistroAsistencia[]
@@ -123,6 +129,8 @@ export default function PaginaGps({
   supervisiones: any[]
   /** Avisa al dashboard que un objetivo cambió, para refrescar su lista. */
   onObjetivoActualizado?: (objetivo: any) => void
+  /** Usuario actual: sólo decide si se muestra Vehículos de supervisión (la base revalida). */
+  usuario?: SujetoAcceso | null
 }) {
   // ── Filtros ───────────────────────────────────────────────────────────────
   const [desde, setDesde] = useState(haceDiasISO(7))
@@ -979,6 +987,10 @@ export default function PaginaGps({
           }}
         />
       </div>
+
+      {puedeVerVehiculosSupervision(usuario) && (
+        <VehiculosSupervision guardias={guardias} puedeGestionar={puedeGestionarVehiculosSupervision(usuario)} />
+      )}
     </div>
   )
 }
