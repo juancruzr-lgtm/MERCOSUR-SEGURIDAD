@@ -8,6 +8,7 @@ import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import FacturasCobros from './FacturasCobros'
+import ClientesDeuda from './ClientesDeuda'
 
 /** Centavos → texto para los campos de importe (1234567 → "12345,67"), el formato que lee centavosDe. */
 const importeTexto = (c: number) => (c / 100).toFixed(2).replace('.', ',')
@@ -30,12 +31,16 @@ export default function Cobranzas() {
       {vista === 'facturas' && <FacturasCobros alVerCliente={id => { setCli(id); setVista('cuenta') }} />}
       {vista === 'banco' && <Conciliacion clientes={clientes} />}
       {vista === 'cuenta' && <div style={S.card}>
-        <div style={S.fila}>
-          <h3 style={{ ...S.h3, margin: 0 }}>Cuenta corriente</h3>
-          <select style={S.input} value={cli} onChange={e => setCli(e.target.value)}><option value="">Elegí un cliente…</option>{clientes.map(c => <option key={c.id} value={c.id}>{c.razon_social}</option>)}</select>
-          <Mensaje />
-        </div>
-        {cli && !ocupado && <CuentaCliente clienteId={cli} />}
+        {!cli && <ClientesDeuda clientes={clientes} alElegir={setCli} />}
+        {cli && <>
+          <div style={S.fila}>
+            <button style={S.btn2} onClick={() => setCli('')}>← Todos los clientes</button>
+            <h3 style={{ ...S.h3, margin: 0 }}>Cuenta corriente</h3>
+            <select style={S.input} value={cli} onChange={e => setCli(e.target.value)}>{clientes.map(c => <option key={c.id} value={c.id}>{c.razon_social}</option>)}</select>
+            <Mensaje />
+          </div>
+          {!ocupado && <CuentaCliente clienteId={cli} />}
+        </>}
       </div>}
     </div>
   )
