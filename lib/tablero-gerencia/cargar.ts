@@ -165,6 +165,24 @@ export async function cargarTablero(
 
 // ── Histórico: todos los meses con datos ────────────────────────────────────
 
+/** Como porLotes, pero con varias consultas a la vez (sólo lectura). */
+async function porLotesParalelo<T>(ids: string[], consulta: (lote: string[]) => PromiseLike<{ data: T[] | null; error: any }>, tam = 150, simultaneas = 6): Promise<T[]> {
+  const lotes: string[][] = []
+  for (let i = 0; i < ids.length; i += tam) lotes.push(ids.slice(i, i + tam))
+  const out: T[][] = new Array(lotes.length)
+  let siguiente = 0
+  const trabajador = async () => {
+    while (siguiente < lotes.length) {
+      const k = siguiente++
+      const { data, error } = await consulta(lotes[k])
+      if (error) throw new Error(error.message)
+      out[k] = data ?? []
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(simultaneas, lotes.length) }, trabajador))
+  return out.flat()
+}
+
 export interface DatosHistorico {
   turnos: TurnoHoras[]
   registros: RegistroHoras[]
@@ -179,7 +197,7 @@ export async function cargarHistorico(sb: SupabaseClient, p: { desde: string; co
   const turnos = await fetchPaginado<TurnoHoras>((a, b) =>
     sb.from('turnos').select('id, objetivo_id, guardia_id, fecha, hora_inicio, hora_fin, estado').gte('fecha', p.desde).order('id').range(a, b))
   p.onProgreso?.(`Leyendo fichajes de ${turnos.length.toLocaleString('es-AR')} turnos…`)
-  const registros = await porLotes<RegistroHoras>(turnos.map(t => t.id), lote =>
+  const registros = await porLotesParalelo<RegistroHoras>(turnos.map(t => t.id), lote =>
     sb.from('registros_asistencia').select('id, turno_id, guardia_id, tipo_registro, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, origen_cobertura, cobertura_anulada_at, registro_anulado_at, alerta_entrada, gps_ingreso_estado').in('turno_id', lote))
   p.onProgreso?.('Leyendo supervisiones y rondas…')
   const supervisiones = await fetchPaginado<DatosHistorico['supervisiones'][number]>((a, b) =>
