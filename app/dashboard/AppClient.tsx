@@ -173,7 +173,7 @@ const AsistenciaMap = dynamic(() => import('@/components/asistencia/AsistenciaMa
 })
 
 // Tablero de Gerencia: oculto salvo NEXT_PUBLIC_TABLERO_GERENCIA=1 (vista previa, sin envíos).
-const TableroGerenciaPanel = dynamic(() => import('@/components/tablero-gerencia/TableroGerenciaPanel'), { ssr: false })
+const TableroGerenciaPanel = dynamic(() => import('@/components/tablero-gerencia/TableroGerenciaInicio'), { ssr: false })
 const TableroAdministracionPanel = dynamic(() => import('@/components/gestion-admin/TableroAdministracionPanel'), { ssr: false })
 const PaginaGps = dynamic(() => import('@/components/gps/PaginaGps'), {
   ssr: false,
