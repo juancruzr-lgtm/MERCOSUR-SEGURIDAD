@@ -24,16 +24,11 @@ function formato(v: number | null, f: Indicador['formato']): string {
   return v.toLocaleString('es-AR', { maximumFractionDigits: 0 })
 }
 
-export default function ComparacionMensual({ objetivos, objetivosPermitidos, verEconomico, cargar = cargarHistorico }: {
-  objetivos: { id: string; es_prueba?: boolean | null }[]
-  objetivosPermitidos: ReadonlySet<string> | null
-  verEconomico: boolean
-  cargar?: typeof cargarHistorico
-}) {
+/** Carga el histórico una sola vez para todas las vistas (sólo lectura). */
+export function useHistorico(verEconomico: boolean, cargar: typeof cargarHistorico = cargarHistorico) {
   const [datos, setDatos] = useState<DatosHistorico | null>(null)
   const [progreso, setProgreso] = useState('Cargando…')
   const [error, setError] = useState<string | null>(null)
-
   useEffect(() => {
     let vivo = true
     cargar(supabase, { desde: DESDE, conEconomico: verEconomico, onProgreso: t => vivo && setProgreso(t) })
@@ -41,6 +36,17 @@ export default function ComparacionMensual({ objetivos, objetivosPermitidos, ver
       .catch(e => { if (vivo) setError(e?.message ?? String(e)) })
     return () => { vivo = false }
   }, [cargar, verEconomico])
+  return { datos, progreso, error }
+}
+
+export default function ComparacionMensual({ objetivos, objetivosPermitidos, verEconomico, datos, progreso, error }: {
+  objetivos: { id: string; es_prueba?: boolean | null }[]
+  objetivosPermitidos: ReadonlySet<string> | null
+  verEconomico: boolean
+  datos: DatosHistorico | null
+  progreso: string
+  error: string | null
+}) {
 
   const { filas, palabras, sinFichajes } = useMemo(() => {
     if (!datos) return { filas: [] as FilaMes[], palabras: [] as string[], sinFichajes: [] as string[] }
