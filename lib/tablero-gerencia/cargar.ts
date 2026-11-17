@@ -13,6 +13,7 @@ import { cargarUltimaSupervisionPorObjetivo } from '@/lib/supervision-universo'
 import type { Caso } from './casos'
 import type { Fuentes, IntervencionFuente, RegistroFuente, RondaAlertaFuente, SalidaFuente, TurnoFuente, ObjetivoFuente } from './fuentes'
 import type { RegistroHoras, TurnoHoras } from './horas'
+import type { SupervisionVisita } from './supervision-preventiva'
 
 export function rangoMes(mes: string): { desde: string; hastaExcl: string } {
   const [y, m] = mes.split('-').map(Number)
@@ -55,6 +56,8 @@ export interface DatosTablero {
   horasMesAnterior: { turnos: TurnoHoras[]; registros: RegistroHoras[] }
   /** false = la migración gestion_casos no está aplicada: acciones deshabilitadas. */
   migracionCasos: boolean
+  /** Visitas de supervisión del mes (cobertura preventiva). */
+  supervisiones: SupervisionVisita[]
   /** Prefacturas del mes (sólo si se pidió y la RLS lo permite). */
   facturacion: { cliente: string; total: number; estado: string }[] | null
   advertencias: string[]
@@ -89,6 +92,15 @@ export async function cargarTablero(
     sb.from('salidas_anticipadas')
       .select('id, registro_id, turno_id, empleado_id, objetivo_id, fecha, minutos_antes, estado, motivo, resuelto_at, resuelto_por, detectada_at')
       .eq('periodo', p.mes).order('id').range(a, b))
+
+  let supervisiones: SupervisionVisita[] = []
+  try {
+    supervisiones = await fetchPaginado<SupervisionVisita>((a, b) =>
+      sb.from('supervisiones').select('id, objetivo_id, supervisor_id, estado, created_at')
+        .gte('created_at', `${desde}T03:00:00Z`).lt('created_at', `${hastaExcl}T03:00:00Z`).order('id').range(a, b))
+  } catch {
+    advertencias.push('No se pudieron leer las supervisiones del mes: la cobertura preventiva no está disponible.')
+  }
 
   // Casos guardados: sólo existen si la migración 20261215120000 se aplicó.
   let migracionCasos = false
@@ -128,6 +140,7 @@ export async function cargarTablero(
     horasMes: { turnos: conCliente(actual.turnos), registros: actual.registros },
     horasMesAnterior: { turnos: conCliente(previo.turnos), registros: previo.registros },
     migracionCasos,
+    supervisiones,
     facturacion,
     advertencias,
   }
