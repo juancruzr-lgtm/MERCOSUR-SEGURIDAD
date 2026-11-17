@@ -14,6 +14,7 @@ import type { Caso } from './casos'
 import type { Fuentes, IntervencionFuente, RegistroFuente, RondaAlertaFuente, SalidaFuente, TurnoFuente, ObjetivoFuente } from './fuentes'
 import type { RegistroHoras, TurnoHoras } from './horas'
 import type { SupervisionVisita } from './supervision-preventiva'
+import type { ReclamoCliente } from './calidad'
 
 export function rangoMes(mes: string): { desde: string; hastaExcl: string } {
   const [y, m] = mes.split('-').map(Number)
@@ -58,6 +59,10 @@ export interface DatosTablero {
   migracionCasos: boolean
   /** Visitas de supervisión del mes (cobertura preventiva). */
   supervisiones: SupervisionVisita[]
+  /** Reclamos de clientes del mes; null = migración 20261216120000 sin aplicar. */
+  reclamos: ReclamoCliente[] | null
+  /** Versiones guardadas del informe del mes; null = sin migración o sin permiso. */
+  informes: { version: number; generado_at: string; sha256: string; motivo: string | null }[] | null
   /** Prefacturas del mes (sólo si se pidió y la RLS lo permite). */
   facturacion: { cliente: string; total: number; estado: string }[] | null
   advertencias: string[]
@@ -102,6 +107,16 @@ export async function cargarTablero(
     advertencias.push('No se pudieron leer las supervisiones del mes: la cobertura preventiva no está disponible.')
   }
 
+  let reclamos: ReclamoCliente[] | null = null
+  const rc = await sb.from('gestion_reclamos').select('id, cliente_id, objetivo_id, fecha, recibido_at, descripcion, caso_id, estado')
+    .gte('fecha', desde).lt('fecha', hastaExcl)
+  if (!rc.error) reclamos = (rc.data ?? []).map((r: any) => ({
+    id: r.id, clienteId: r.cliente_id, objetivoId: r.objetivo_id, fecha: r.fecha, recibidoAt: r.recibido_at, descripcion: r.descripcion, casoId: r.caso_id, estado: r.estado,
+  }))
+  let informes: DatosTablero['informes'] = null
+  const inf = await sb.from('gestion_informes_mensuales').select('version, generado_at, sha256, motivo').eq('mes', p.mes).order('version')
+  if (!inf.error) informes = inf.data ?? []
+
   // Casos guardados: sólo existen si la migración 20261215120000 se aplicó.
   let migracionCasos = false
   let casosGuardados: Caso[] = []
@@ -141,6 +156,8 @@ export async function cargarTablero(
     horasMesAnterior: { turnos: conCliente(previo.turnos), registros: previo.registros },
     migracionCasos,
     supervisiones,
+    reclamos,
+    informes,
     facturacion,
     advertencias,
   }

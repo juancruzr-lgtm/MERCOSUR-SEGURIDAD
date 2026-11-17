@@ -90,7 +90,7 @@ import LiquidacionPanel from '@/components/liquidacion/LiquidacionPanel'
 import FacturacionPanel from '@/components/facturacion/FacturacionPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import TableroGerencia from '@/components/gerencia/TableroGerencia'
-import { tableroGerenciaVisible } from '@/lib/tablero-gerencia/acceso'
+import { gestionAdministracionVisible, tableroGerenciaVisible } from '@/lib/tablero-gerencia/acceso'
 import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
@@ -174,6 +174,7 @@ const AsistenciaMap = dynamic(() => import('@/components/asistencia/AsistenciaMa
 
 // Tablero de Gerencia: oculto salvo NEXT_PUBLIC_TABLERO_GERENCIA=1 (vista previa, sin envíos).
 const TableroGerenciaPanel = dynamic(() => import('@/components/tablero-gerencia/TableroGerenciaPanel'), { ssr: false })
+const TableroAdministracionPanel = dynamic(() => import('@/components/gestion-admin/TableroAdministracionPanel'), { ssr: false })
 const PaginaGps = dynamic(() => import('@/components/gps/PaginaGps'), {
   ssr: false,
   loading: () => <div style={{ color:'#64748b', padding:48, textAlign:'center' }}>Cargando mapa operativo…</div>,
@@ -14298,6 +14299,7 @@ const esGuardia = esRolGuardia(user.rol)
       // (revisar, situación, vencimientos, auditoría) y archivo histórico.
       // Sólo puesto Administración o Gerencia (sin overrides). No Supervisión.
       ...(gestionaDatosSensibles(user) ? [{ id:'legajo_digital', icon:'🗂️', label:'Legajo Digital' }] : []),
+      ...(gestionAdministracionVisible() && gestionaDatosSensibles(user) ? [{ id:'gestion_administracion', icon:'📋', label:'Administración' }] : []),
       { id:'reportes', icon:'📈', label:'Reportes' },
       { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
       { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
@@ -14447,6 +14449,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'estatuto_interno' && tieneCapacidad(user, 'gestionar_personal') && <ControlEstatuto user={user} />}
               {page === 'protocolos' && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas')) && <ControlProtocolos />}
               {page === 'legajo_digital' && gestionaDatosSensibles(user) && <LegajoDigital user={user} />}
+              {page === 'gestion_administracion' && gestionAdministracionVisible() && gestionaDatosSensibles(user) && <TableroAdministracionPanel />}
               {/* Accesos anteriores (enlaces guardados): abren la misma pantalla en su sección. */}
               {page === 'legajo_cambios_datos' && gestionaDatosSensibles(user) && <LegajoDigital inicial="datos" user={user} />}
               {page === 'documentacion_legajo' && gestionaDatosSensibles(user) && <LegajoDigital inicial="documentacion" user={user} />}

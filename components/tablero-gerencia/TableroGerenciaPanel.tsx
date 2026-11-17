@@ -21,6 +21,7 @@ import { compararMeses, lineaHoras, resumirHorasMes, type LineaHoras, type Regis
 import { agruparPorDestinatario, plantillasParaCaso, prepararLote, type DestinoPlantilla, type DestinatarioPropuesto } from '@/lib/tablero-gerencia/mensajes'
 import { ENVIO_MENSAJES_GESTION_HABILITADO, permisosTablero } from '@/lib/tablero-gerencia/acceso'
 import SupervisionPreventivaCard from './SupervisionPreventivaCard'
+import CalidadInformeCard from './CalidadInformeCard'
 
 // ── Estilos (misma paleta oscura que el resto del panel) ──────────────────────
 const C = { fondo: '#0a0e1a', card: '#0f1629', borde: '#1e293b', texto: '#e2e8f0', sub: '#64748b', azul: '#2563eb', rojo: '#f87171', ambar: '#fbbf24', verde: '#4ade80' }
@@ -327,6 +328,25 @@ export default function TableroGerenciaPanel({ user, objetivos, guardias, zonasO
             turnos={datos.fuentes.turnos}
             casos={casos}
             nombre={id => nombre(id)}
+          />
+
+          <CalidadInformeCard
+            mes={mes}
+            mesCerrado={mes < mesActualAr()}
+            casos={casos}
+            resumen={resumen}
+            horas={horas ? { resumen: horas.resumen, comparacion: horas.comparacion } : null}
+            reclamos={datos.reclamos ?? null}
+            informes={datos.informes ?? null}
+            facturacion={permisos.verEconomico ? datos.facturacion : null}
+            objetivos={objetivos.filter(o => o.estado === 'activo' && !o.es_prueba && objetivosFiltro.has(o.id) &&
+              (permisos.objetivosPermitidos === null || permisos.objetivosPermitidos.has(o.id)))}
+            supervisiones={datos.supervisiones ?? []}
+            turnos={datos.fuentes.turnos}
+            esGerencia={permisos.autorizarEnvios}
+            nombreObjetivo={id => objetivo.get(id)?.nombre ?? '—'}
+            nombre={id => nombre(id)}
+            etiquetaTipo={t => ETIQUETA_TIPO[t as TipoCaso] ?? t}
           />
 
           {/* Lista de casos */}

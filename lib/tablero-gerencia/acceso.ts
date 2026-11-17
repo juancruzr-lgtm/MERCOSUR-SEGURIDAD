@@ -23,6 +23,11 @@ export function tableroGerenciaVisible(valor: string | undefined = process.env.N
 
 export const ENVIO_MENSAJES_GESTION_HABILITADO = false as const
 
+/** Tablero de Administración: oculto salvo NEXT_PUBLIC_GESTION_ADMINISTRACION === '1'. */
+export function gestionAdministracionVisible(valor: string | undefined = process.env.NEXT_PUBLIC_GESTION_ADMINISTRACION): boolean {
+  return valor === '1'
+}
+
 export interface PermisosTablero {
   verTablero: boolean
   verEconomico: boolean
