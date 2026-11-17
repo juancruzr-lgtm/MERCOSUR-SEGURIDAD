@@ -184,3 +184,56 @@ export function resumenEnPalabras(filas: FilaMes[], filasMismoDiaAnterior: FilaM
   }
   return out
 }
+
+export interface RankingMes {
+  objetivosSinFichaje: { id: string; n: number; de: number }[]
+  personasTarde: { id: string; n: number }[]
+  objetivosPocaSupervision: { id: string; visitas: number; turnos: number }[]
+}
+
+/** "Dónde mirar" en un mes: pocos nombres, los que más pesan. */
+export function rankingMes(p: {
+  mes: string
+  ahoraIso: string
+  turnos: TurnoHoras[]
+  registros: RegistroHistorico[]
+  supervisiones: { objetivo_id: string; created_at: string }[]
+  objetivoValido?: (id: string | null) => boolean
+  top?: number
+}): RankingMes {
+  const ok = p.objetivoValido ?? (() => true)
+  const top = p.top ?? 3
+  const ahora = Date.parse(p.ahoraIso)
+  const porTurno = new Map<string, RegistroHistorico[]>()
+  for (const r of p.registros) porTurno.set(r.turno_id, [...(porTurno.get(r.turno_id) ?? []), r])
+  const sinF = new Map<string, { n: number; de: number }>()
+  const tarde = new Map<string, number>()
+  const turnosObj = new Map<string, number>()
+  for (const t of p.turnos) {
+    if (t.fecha.slice(0, 7) !== p.mes || !ok(t.objetivo_id ?? null) || ESTADOS_SIN_OBLIGACION.has(t.estado ?? '') || finTurno(t) > ahora) continue
+    const o = t.objetivo_id!
+    turnosObj.set(o, (turnosObj.get(o) ?? 0) + 1)
+    const vig = (porTurno.get(t.id) ?? []).filter(r => !r.registro_anulado_at)
+    if (vig.some(r => r.tipo_registro === 'ausencia')) continue
+    const e = sinF.get(o) ?? { n: 0, de: 0 }
+    e.de++
+    const ent = vig.find(r => r.hora_entrada_real)
+    if (!ent) e.n++
+    else if (ent.alerta_entrada === 'tarde') {
+      const quien = ent.guardia_id ?? t.guardia_id ?? null
+      if (quien) tarde.set(quien, (tarde.get(quien) ?? 0) + 1)
+    }
+    sinF.set(o, e)
+  }
+  const visitas = new Map<string, number>()
+  for (const s of p.supervisiones) {
+    const mes = new Date(Date.parse(s.created_at) - 3 * 3_600_000).toISOString().slice(0, 7)
+    if (mes === p.mes && ok(s.objetivo_id)) visitas.set(s.objetivo_id, (visitas.get(s.objetivo_id) ?? 0) + 1)
+  }
+  return {
+    objetivosSinFichaje: Array.from(sinF.entries()).filter(([, v]) => v.n > 0).map(([id, v]) => ({ id, ...v })).sort((a, b) => b.n - a.n).slice(0, top),
+    personasTarde: Array.from(tarde.entries()).map(([id, n]) => ({ id, n })).sort((a, b) => b.n - a.n).slice(0, top),
+    objetivosPocaSupervision: Array.from(turnosObj.entries()).map(([id, turnos]) => ({ id, turnos, visitas: visitas.get(id) ?? 0 }))
+      .sort((a, b) => a.visitas - b.visitas || b.turnos - a.turnos).slice(0, top),
+  }
+}

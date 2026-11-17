@@ -53,3 +53,24 @@ describe('comparación mes a mes', () => {
     expect(f[0].avisos[0]).toMatch(/Sin fichajes/)
   })
 })
+
+import { rankingMes } from '@/lib/tablero-gerencia/historico'
+
+describe('dónde mirar en un mes', () => {
+  it('ordena objetivos sin fichaje, personas que llegan tarde y objetivos con menos visitas', () => {
+    const tt = (id: string, obj: string, g: string) => ({ id, objetivo_id: obj, guardia_id: g, fecha: '2026-10-10', hora_inicio: '08:00', hora_fin: '20:00', estado: 'programado' })
+    const r = rankingMes({
+      mes: '2026-10', ahoraIso: '2026-11-17T15:00:00Z',
+      turnos: [tt('1', 'A', 'e1'), tt('2', 'A', 'e1'), tt('3', 'B', 'e2'), tt('4', 'B', 'e2'), tt('5', 'C', 'e3')],
+      registros: [
+        { id: 'r3', turno_id: '3', guardia_id: 'e2', hora_entrada_real: '08:30', alerta_entrada: 'tarde' },
+        { id: 'r4', turno_id: '4', guardia_id: 'e2', hora_entrada_real: '08:30', alerta_entrada: 'tarde' },
+        { id: 'r5', turno_id: '5', guardia_id: 'e3', hora_entrada_real: '08:00' },
+      ],
+      supervisiones: [{ objetivo_id: 'B', created_at: '2026-10-05T15:00:00Z' }, { objetivo_id: 'C', created_at: '2026-10-05T15:00:00Z' }, { objetivo_id: 'C', created_at: '2026-10-06T15:00:00Z' }],
+    })
+    expect(r.objetivosSinFichaje).toEqual([{ id: 'A', n: 2, de: 2 }])
+    expect(r.personasTarde).toEqual([{ id: 'e2', n: 2 }])
+    expect(r.objetivosPocaSupervision.map(x => x.id)).toEqual(['A', 'B', 'C'])
+  })
+})
