@@ -42,8 +42,8 @@ export default function ComparacionMensual({ objetivos, objetivosPermitidos, ver
     return () => { vivo = false }
   }, [cargar, verEconomico])
 
-  const { filas, palabras } = useMemo(() => {
-    if (!datos) return { filas: [] as FilaMes[], palabras: [] as string[] }
+  const { filas, palabras, sinFichajes } = useMemo(() => {
+    if (!datos) return { filas: [] as FilaMes[], palabras: [] as string[], sinFichajes: [] as string[] }
     const prueba = new Set(objetivos.filter(o => o.es_prueba).map(o => o.id))
     const objetivoValido = (id: string | null) => !!id && !prueba.has(id) && (objetivosPermitidos === null || objetivosPermitidos.has(id))
     const ahora = new Date()
@@ -56,7 +56,9 @@ export default function ComparacionMensual({ objetivos, objetivosPermitidos, ver
       turnos: datos.turnos.filter(t => t.fecha.slice(0, 7) === mesPrev),
       supervisiones: [], alertasRonda: [], facturacion: null, objetivoValido,
     }).find(f => f.mes === mesPrev) ?? null
-    return { filas: filas.filter(f => f.turnos > 0), palabras: resumenEnPalabras(filas, corte), corte }
+    // Meses sin fichajes cargados (antes de usar la app) no se comparan: darían 0 horas.
+    const conDatos = filas.filter(f => f.conFichaje + f.ausencias > 0)
+    return { filas: conDatos, palabras: resumenEnPalabras(conDatos, corte), sinFichajes: filas.filter(f => f.turnos > 0 && f.conFichaje + f.ausencias === 0).map(f => f.mes) }
   }, [datos, objetivos, objetivosPermitidos])
 
   if (error) return <div style={{ ...card, color: C.rojo }}>No se pudo cargar: {error}</div>
@@ -118,7 +120,9 @@ export default function ComparacionMensual({ objetivos, objetivosPermitidos, ver
           </table>
         </div>
         <div style={{ ...sub, marginTop: 8, display: 'grid', gap: 2 }}>
-          {filas.filter(f => f.avisos.length).map(f => <div key={f.mes}>{nombreMes(f.mes)}: {f.avisos.join(' · ')}</div>)}
+          {filas.filter(f => f.avisos.length && !f.parcial).map(f => <div key={f.mes}>{nombreMes(f.mes)}: {f.avisos.join(' · ')}</div>)}
+          {sinFichajes.length > 0 && <div>{sinFichajes.map(nombreMes).join(', ')}: hay turnos programados pero no fichajes en la app, por eso no se comparan.</div>}
+          <div>"Turnos sin fichaje" incluye los que se cargaron o confirmaron a mano sin que el vigilador fichara la entrada.</div>
           <div>Sólo turnos ya terminados. Horas con la misma regla que la liquidación. "Fichajes fuera del lugar" puede incluir errores de GPS o de configuración del objetivo: no son faltas por sí solos.</div>
         </div>
       </div>
