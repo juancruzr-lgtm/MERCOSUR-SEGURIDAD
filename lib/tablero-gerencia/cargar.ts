@@ -162,3 +162,34 @@ export async function cargarTablero(
     advertencias,
   }
 }
+
+// ── Histórico: todos los meses con datos ────────────────────────────────────
+
+export interface DatosHistorico {
+  turnos: TurnoHoras[]
+  registros: RegistroHoras[]
+  supervisiones: { objetivo_id: string; created_at: string; estado: string | null }[]
+  alertasRonda: { ventana_inicio: string }[]
+  facturacion: { mes: string; total: number }[] | null
+}
+
+/** SÓLO LECTURA. Trae columnas mínimas desde `desde` (AAAA-MM-DD) hasta hoy. */
+export async function cargarHistorico(sb: SupabaseClient, p: { desde: string; conEconomico: boolean; onProgreso?: (t: string) => void }): Promise<DatosHistorico> {
+  p.onProgreso?.('Leyendo turnos…')
+  const turnos = await fetchPaginado<TurnoHoras>((a, b) =>
+    sb.from('turnos').select('id, objetivo_id, guardia_id, fecha, hora_inicio, hora_fin, estado').gte('fecha', p.desde).order('id').range(a, b))
+  p.onProgreso?.(`Leyendo fichajes de ${turnos.length.toLocaleString('es-AR')} turnos…`)
+  const registros = await porLotes<RegistroHoras>(turnos.map(t => t.id), lote =>
+    sb.from('registros_asistencia').select('id, turno_id, guardia_id, tipo_registro, hora_entrada_real, hora_salida_real, hora_entrada_final, hora_salida_final, horas_trabajadas, horas_liquidables, origen_cobertura, cobertura_anulada_at, registro_anulado_at, alerta_entrada, gps_ingreso_estado').in('turno_id', lote))
+  p.onProgreso?.('Leyendo supervisiones y rondas…')
+  const supervisiones = await fetchPaginado<DatosHistorico['supervisiones'][number]>((a, b) =>
+    sb.from('supervisiones').select('objetivo_id, created_at, estado').gte('created_at', `${p.desde}T03:00:00Z`).order('id').range(a, b))
+  const alertasRonda = await fetchPaginado<{ ventana_inicio: string }>((a, b) =>
+    sb.from('ronda_alertas').select('ventana_inicio').gte('ventana_inicio', `${p.desde}T03:00:00Z`).order('id').range(a, b))
+  let facturacion: DatosHistorico['facturacion'] = null
+  if (p.conEconomico) {
+    const f = await sb.from('fact_prefacturas').select('periodo_mes, total_c, estado')
+    if (!f.error) facturacion = (f.data ?? []).filter((x: any) => x.estado !== 'descartada').map((x: any) => ({ mes: x.periodo_mes, total: Number(x.total_c ?? 0) / 100 }))
+  }
+  return { turnos, registros, supervisiones, alertasRonda, facturacion }
+}
