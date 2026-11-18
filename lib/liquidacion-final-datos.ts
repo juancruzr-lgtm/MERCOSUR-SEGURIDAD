@@ -121,11 +121,19 @@ async function persona(client: any, baja: BajaFila): Promise<Persona> {
       legajoVisual = u.legajo_visual ?? null
     }
   }
-  // Padrón de liquidación (personas con o sin usuario): COD_INTERNO de Visual.
-  if (cuil) {
-    const { data: p } = await client.from('liquidacion_persona').select('cod_interno, nombre').eq('cuil', cuil).maybeSingle()
-    if (p?.cod_interno) legajoVisual = String(p.cod_interno)
-    if (!nombre && p?.nombre) nombre = p.nombre
+  // Padrón de liquidación (identidad de Visual): COD_INTERNO y, si la ficha no tiene
+  // CUIL cargado, el CUIL del padrón. Se busca por CUIL si lo tenemos; si no, por
+  // usuario. Así una ficha incompleta (p. ej. una baja registrada desde guardias sin
+  // CUIL) no bloquea la final cuando el padrón ya tiene el dato.
+  const { data: p } = cuil
+    ? await client.from('liquidacion_persona').select('cod_interno, nombre, cuil').eq('cuil', cuil).maybeSingle()
+    : baja.empleado_id
+      ? await client.from('liquidacion_persona').select('cod_interno, nombre, cuil').eq('usuario_id', baja.empleado_id).maybeSingle()
+      : { data: null }
+  if (p) {
+    cuil = cuil ?? digitos(p.cuil)
+    if (p.cod_interno) legajoVisual = String(p.cod_interno)
+    if (!nombre && p.nombre) nombre = p.nombre
   }
   return { cuil, legajoVisual, nombre: nombre || cuil || 'sin nombre', empleadoId: baja.empleado_id }
 }
@@ -257,8 +265,11 @@ export async function contextoDeFinal(client: any, f: FinalFila): Promise<{ dato
   const v = b.vacaciones
   const e = f.entradas?.vacaciones
   let auto: AutoVacaciones | null = null
-  if (!eventual && b.empleado_id && b.fecha_ingreso && b.fecha_baja) {
-    const rv = resumenVacaciones({ ingreso: b.fecha_ingreso, baja: b.fecha_baja, tomadas: await vacacionesTomadasCliente(client, b.empleado_id) })
+  // `ingreso` ya trae el fallback al legajo (legajo_datos_personales) cuando la baja
+  // no guardó la fecha —caso típico de una baja registrada desde guardias—; usarlo
+  // acá, no `b.fecha_ingreso`, para que la fecha cargada en el legajo cuente.
+  if (!eventual && b.empleado_id && ingreso && b.fecha_baja) {
+    const rv = resumenVacaciones({ ingreso, baja: b.fecha_baja, tomadas: await vacacionesTomadasCliente(client, b.empleado_id) })
     if (rv.devengadasMetodoEmpresa != null) auto = {
       saldoDias: rv.devengadasMetodoEmpresa, tomadasDias: rv.tomadas,
       nota: `calculadas sobre el total de la antigüedad: ${rv.antiguedadDias} días × 14/365 = ${rv.devengadasMetodoEmpresa} devengadas − ${rv.tomadas} tomada(s)`,
