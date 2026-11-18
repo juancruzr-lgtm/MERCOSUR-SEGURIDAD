@@ -3,10 +3,13 @@
 //   10/11 se le informó a ARCA otra fecha, pero el comprobante y el PDF quedaban con 03/11. Ahora el
 //   comprobante guarda lo que recibió ARCA (migración 20261210100000).
 // - Gerencia (10/11/2026): los contratos tienen 30 días de plazo si no dicen otro (20261210110000).
+// - Gerencia (18/11/2026): Laromet pasó a 60 días y la emisión seguía tomando la fecha guardada en la
+//   prefactura (calculada con 30). El vencimiento se calcula al emitir con el plazo VIGENTE del contrato.
 import { readFileSync } from 'fs'
 import { describe, expect, it } from 'vitest'
 import { comprobanteDesdeSolicitud } from '@/lib/facturacion/emision-servidor'
-import { PLAZO_PAGO_POR_DEFECTO, plazoPagoDias, vtoPagoParaArca } from '@/lib/facturacion/vto-arca'
+import { datosComprobantesEnLinea } from '@/lib/facturacion/emision-manual'
+import { PLAZO_PAGO_POR_DEFECTO, plazoPagoDias, vtoPagoAlEmitir } from '@/lib/facturacion/vto-arca'
 
 const leer = (ruta: string) => readFileSync(new URL(`../${ruta}`, import.meta.url), 'utf8')
 
@@ -33,22 +36,12 @@ describe('plazo de pago del contrato', () => {
 })
 
 describe('vencimiento de pago informado a ARCA', () => {
-  it('si la fecha aprobada todavía no pasó, se respeta', () => {
-    expect(vtoPagoParaArca('2026-11-10', '2026-11-10')).toBe('2026-11-10')
-    expect(vtoPagoParaArca('2026-12-10', '2026-11-10', 45)).toBe('2026-12-10')
-  })
-
-  it('si ya pasó, emisión + plazo del contrato (30 días si no tiene otro)', () => {
-    expect(vtoPagoParaArca('2026-11-03', '2026-11-10')).toBe('2026-12-10')
-    expect(vtoPagoParaArca('2026-11-03', '2026-11-10', null)).toBe('2026-12-10')
-    expect(vtoPagoParaArca('2026-11-03', '2026-11-10', 45)).toBe('2026-12-25')
-    expect(vtoPagoParaArca('2026-11-03', '2026-11-10', 0)).toBe('2026-11-10')
-  })
-
-  it('sin fecha aprobada, emisión + plazo', () => {
-    expect(vtoPagoParaArca(null, '2026-11-10')).toBe('2026-12-10')
-    expect(vtoPagoParaArca(undefined, '2026-12-15')).toBe('2027-01-14')
-    expect(vtoPagoParaArca('', '2026-11-10', 15)).toBe('2026-11-25')
+  it('emisión + plazo del contrato (30 días si no tiene otro)', () => {
+    expect(vtoPagoAlEmitir('2026-11-10')).toBe('2026-12-10')
+    expect(vtoPagoAlEmitir('2026-11-10', null)).toBe('2026-12-10')
+    expect(vtoPagoAlEmitir('2026-11-10', 45)).toBe('2026-12-25')
+    expect(vtoPagoAlEmitir('2026-11-10', 0)).toBe('2026-11-10')
+    expect(vtoPagoAlEmitir('2026-12-15')).toBe('2027-01-14')
   })
 
   it('el pedido a ARCA aplica esa regla (caso PNC, factura A del 10/11)', () => {
@@ -62,6 +55,27 @@ describe('vencimiento de pago informado a ARCA', () => {
     expect(c.servicioDesde).toBe('2026-10-01')
     expect(c.servicioHasta).toBe('2026-10-31')
     expect(comprobanteDesdeSolicitud(e, { numero: 1, hoy: '2026-11-10', condicionIva: 'responsable_inscripto', plazoDias: 45 }).vtoPago).toBe('2026-12-25')
+  })
+
+  it('cambio de plazo en el contrato: lo que se emite después toma el nuevo, aunque la prefactura guarde otra fecha (Laromet, 60 días)', () => {
+    // La prefactura se generó con 30 días (vto 2026-12-18) y todavía no pasó: antes se informaba esa fecha.
+    const e = {
+      id: 'e2', tipo: 1, punto_venta: 4,
+      solicitud: { neto_c: 100000000, iva_c: 21000000, total_c: 121000000, vto_pago: '2026-12-18', periodo_desde: '2026-11-01', periodo_hasta: '2026-11-30', cuit_receptor: '30501125594' },
+    } as any
+    expect(comprobanteDesdeSolicitud(e, { numero: 6, hoy: '2026-11-18', condicionIva: 'responsable_inscripto', plazoDias: 60 }).vtoPago).toBe('2027-01-17')
+    // Con fecha de emisión elegida, desde esa fecha.
+    expect(comprobanteDesdeSolicitud(e, { numero: 6, hoy: '2026-11-18', condicionIva: 'responsable_inscripto', plazoDias: 60, fechaEmision: '2026-11-10' }).vtoPago).toBe('2027-01-09')
+  })
+
+  it('Comprobantes en línea (contingencia): el mismo vencimiento que la emisión por la app', () => {
+    const p = {
+      tipo_comprobante: 1, cuit_receptor: '30501125594', periodo_desde: '2026-11-01', periodo_hasta_excl: '2026-12-01', fecha_vencimiento: '2026-12-18',
+      texto_factura: 'Servicio', neto_c: 100000000, iva_c: 21000000, total_c: 121000000, lineas: [{ concepto: 'Horas', cantidad: '100', precio: '10000' }],
+    }
+    const vto = (x: any[]) => x.find(r => r.campo === 'Vto. para el pago')?.valor
+    expect(vto(datosComprobantesEnLinea(p, { razon_social: 'LAROMET S A', condicion_iva: 'responsable_inscripto' }, 1, { fechaEmision: '2026-11-18', plazoDias: 60 }))).toBe('17/01/2027')
+    expect(vto(datosComprobantesEnLinea(p, { razon_social: 'LAROMET S A', condicion_iva: 'responsable_inscripto' }, 1))).toBe('18/12/2026')
   })
 })
 

@@ -4,7 +4,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { leer } from '@/lib/facturacion/datos'
 import { antiguedad, type FilaSaldo } from '@/lib/facturacion/tablero-financiero'
-import { estadoCobro } from '@/lib/facturacion/estado-cobro'
+import { conVencimiento, estadoCobro } from '@/lib/facturacion/estado-cobro'
+import { cargarCondicionesPago } from '@/lib/facturacion/condiciones-pago'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import { S, fecha, pesos, useAccion } from './comun'
 
@@ -17,11 +18,12 @@ export default function ClientesDeuda({ clientes, alElegir }: { clientes: any[];
   const hoy = fechaArgentina()
 
   useEffect(() => { correr(async () => {
-    const [s, c] = await Promise.all([
+    const [s, c, cond] = await Promise.all([
       leer('fact_v_saldos', q => q.limit(5000)),
       leer('fact_cobros', q => q.is('anulado_at', null).limit(10000), 'cliente_id, fecha'),
+      cargarCondicionesPago(),
     ])
-    setFilas(s); setCobros(c)
+    setFilas(conVencimiento(s, cond)); setCobros(c)
   }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const lista = useMemo(() => clientes.map(c => {
