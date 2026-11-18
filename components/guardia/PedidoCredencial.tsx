@@ -53,7 +53,11 @@ function Foto({ cara, archivo, leyendo, onElegir, onGirar }: { cara: string; arc
   )
 }
 
-export default function PedidoCredencial({ empleadoId }: { empleadoId: string }) {
+/**
+ * forzar: lo abre la pantalla "Completá tu legajo" (sin mirar si lo pospuso en
+ * esta sesión); al cerrarlo, cualquiera sea la respuesta, avisa con onCerrar.
+ */
+export default function PedidoCredencial({ empleadoId, forzar = false, onCerrar }: { empleadoId: string; forzar?: boolean; onCerrar?: () => void }) {
   const [abierto, setAbierto] = useState(false)
   const [paso, setPaso] = useState<Paso>('elegir')
   const [frente, setFrente] = useState<File | null>(null)
@@ -73,8 +77,11 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
 
   useEffect(() => {
     let vivo = true
-    if (pospuesto()) return
-    void cargarMiEstado().then(e => { if (vivo && e.pedir) { setRechazo(e.rechazo ?? null); setAbierto(true) } }).catch(() => {})
+    if (!forzar && pospuesto()) return
+    void cargarMiEstado().then(e => {
+      if (!vivo) return
+      if (e.pedir) { setRechazo(e.rechazo ?? null); setAbierto(true) } else if (forzar) onCerrar?.()
+    }).catch(() => { if (forzar) onCerrar?.() })
     return () => { vivo = false }
   }, [])
 
@@ -144,7 +151,7 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
             <button type="button" style={opcion('#f59e0b')} onClick={() => setPaso('no_tiene')}>
               ✖ No tengo credencial<div style={{ fontSize: 13, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>Contanos por qué.</div>
             </button>
-            <button type="button" style={{ ...secundario, width: '100%', marginTop: 4 }} onClick={() => { posponer(); setAbierto(false) }}>
+            <button type="button" style={{ ...secundario, width: '100%', marginTop: 4 }} onClick={() => { if (forzar) { setAbierto(false); onCerrar?.(); return } posponer(); setAbierto(false) }}>
               Ahora no la tengo encima (me lo piden la próxima vez)
             </button>
           </>
@@ -203,7 +210,7 @@ export default function PedidoCredencial({ empleadoId }: { empleadoId: string })
           </div>
         )}
         {paso === 'listo' && (
-          <button type="button" style={{ ...primario(true), width: '100%', marginTop: 12 }} onClick={() => setAbierto(false)}>Listo</button>
+          <button type="button" style={{ ...primario(true), width: '100%', marginTop: 12 }} onClick={() => { setAbierto(false); onCerrar?.() }}>Listo</button>
         )}
       </div>
     </div>
