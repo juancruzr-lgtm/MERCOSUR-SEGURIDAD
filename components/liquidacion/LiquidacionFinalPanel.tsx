@@ -127,6 +127,8 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
   const [evaluaciones, setEvaluaciones] = useState<EvaluacionConcepto[]>([])
   const [visualPeriodo, setVisualPeriodo] = useState('')
   const [nuevoAj, setNuevoAj] = useState({ codigo: '', cantidad: '', importe: '', motivo: '' })
+  // Edición del importe directo en el renglón (sin bajar el Excel): guarda un ajuste.
+  const [edit, setEdit] = useState<{ codigo: string; importe: string; motivo: string } | null>(null)
   // Vacaciones editables en pantalla (JC 10/11). Saldo vacío = se calcula por antigüedad (14/365).
   const [vacSaldo, setVacSaldo] = useState('')
   const [vacTomadas, setVacTomadas] = useState('')
@@ -263,7 +265,23 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
             {lineas.map(l => (
               <tr key={l.codigo}>
                 <td style={S.td}>{l.codigo}</td><td style={S.td}>{l.concepto}</td><td style={{ ...S.td, ...S.sub }}>{l.detalle?.tipo ?? '—'}</td>
-                <td style={S.td}>{l.cantidad ?? '—'}</td><td style={S.td}>{pesos(l.importe)}</td><td style={S.td}>{pesos(l.total)}</td>
+                <td style={S.td}>{l.cantidad ?? '—'}</td>
+                <td style={S.td}>
+                  {edit?.codigo === l.codigo ? (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <input style={{ ...S.input, width: 110, padding: '4px 8px' }} inputMode="decimal" autoFocus value={edit.importe} onChange={e => setEdit({ ...edit, importe: e.target.value })} />
+                      <input style={{ ...S.input, width: 170, padding: '4px 8px' }} placeholder="Motivo (obligatorio)" value={edit.motivo} onChange={e => setEdit({ ...edit, motivo: e.target.value })} />
+                      <button style={{ ...S.btn2, padding: '2px 8px' }} disabled={ocupado || edit.motivo.trim().length < 3 || numOrNull(edit.importe) == null} onClick={() => {
+                        const nuevos = [...ajustes.filter(a => a.codigo !== l.codigo), { codigo: l.codigo, cantidad: l.cantidad ?? null, importe: numOrNull(edit.importe), motivo: edit.motivo.trim() }]
+                        setAjustes(nuevos); setEdit(null); void guardarEntradas({ ajustes: nuevos })
+                      }}>Aplicar</button>
+                      <button style={{ ...S.btn2, padding: '2px 8px' }} onClick={() => setEdit(null)}>Cancelar</button>
+                    </div>
+                  ) : (
+                    <>{pesos(l.importe)}{editable && <button title="Cambiar el importe" style={{ ...S.btn2, padding: '1px 6px', marginLeft: 6 }} onClick={() => setEdit({ codigo: l.codigo, importe: String(l.importe ?? ''), motivo: '' })}>✏️</button>}</>
+                  )}
+                </td>
+                <td style={S.td}>{pesos(l.total)}</td>
                 <td style={{ ...S.td, ...S.sub }}>{l.detalle?.formula}{l.detalle?.ajuste ? <div style={{ color: '#fbbf24' }}>Ajuste: {l.detalle.ajuste.motivo}</div> : null}</td>
               </tr>
             ))}
