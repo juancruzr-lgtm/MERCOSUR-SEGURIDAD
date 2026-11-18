@@ -103,7 +103,9 @@ begin
                        where c.empleado_id = u.id and c.estado = 'pendiente_confirmacion');
 
   v_dni := exists (select 1 from public.documentacion_documentos x
-                    where x.empleado_id = u.id and x.tipo = 'dni' and x.estado in ('pendiente_revision', 'aprobado', 'aceptado'));
+                    where x.empleado_id = u.id and x.tipo = 'dni'
+                      -- Cualquier DNI cargado vale (también el que subió Administración y espera que la persona lo acepte).
+                      and x.estado not in ('subiendo', 'rechazado', 'reemplazado', 'anulado'));
   v_dni_rechazo := case when v_dni then null else
     (select x.motivo_rechazo from public.documentacion_documentos x
       where x.empleado_id = u.id and x.tipo = 'dni' and x.estado = 'rechazado' order by x.creado_at desc limit 1) end;
