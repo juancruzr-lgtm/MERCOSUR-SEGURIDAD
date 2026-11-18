@@ -159,7 +159,7 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, alCambiar, alVerCli
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginTop: 8, fontSize: 13 }}>
         <div>
           <h4 style={S.sub}>DATOS</h4>
-          <div>Emitida {fecha(f.fecha_emision)} · vence {fecha(f.vto)} <span style={S.sub}>({detalleVencimiento(f)})</span>
+          <div>Emitida {fecha(f.fecha_emision)} · vence {fecha(f.vto)} <span style={S.sub}>· {detalleVencimiento(f)}</span>
             {f.vto_pago && f.vto_pago !== f.vto && <span style={S.sub}> · la factura informó {fecha(f.vto_pago)}</span>}</div>
           {comp && <div>Neto {pesos(comp.neto_c)} · IVA {pesos(comp.iva_c)} · <b>Total {pesos(comp.total_c)}</b></div>}
           {comp?.servicio_desde && <div>Servicio {fecha(comp.servicio_desde)} al {fecha(comp.servicio_hasta)}</div>}
