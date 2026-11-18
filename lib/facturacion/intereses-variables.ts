@@ -1,31 +1,29 @@
 /**
  * lib/facturacion/intereses-variables.ts
  *
- * Intereses por mora con una tasa que cambia día a día (la BADLAR del BCRA, con la corrección que se elija).
- * SÓLO CÁLCULO: no registra intereses ni pide notas de débito.
+ * Intereses por mora con la Tasa de Intereses Moratorios (TIM) del BCRA (Código Civil y Comercial, art. 768,
+ * inc. c). SÓLO CÁLCULO: no registra intereses ni pide notas de débito.
  *
- * Mismas convenciones que public.fact_interes_calcular (20261201150000), salvo la tasa:
- *  · la mora empieza el día siguiente al vencimiento + los días de gracia;
- *  · el saldo de cada día es el total más los movimientos con fecha hasta ese día (las ND suman; las NC,
- *    los cobros y las retenciones aplicadas restan): el día del cobro ya no genera interés sobre lo cobrado;
- *  · interés de cada día = saldo × tasa del día (% nominal anual) / 36.500 (interés simple); se redondea
- *    al centavo por tramo (un tramo = días seguidos con el mismo saldo).
- *  · tasa del día = la publicada el último día hábil hasta esa fecha, × factor + puntos.
+ * La TIM se publica como un índice diario acumulado (variable 1197 de la API de estadísticas del BCRA, todos los
+ * días). Misma cuenta que la calculadora oficial del BCRA (calculadora-de-tasa-de-intereses-moratorios-tim):
+ *   interés = monto × ((100 + TIM del día de cierre) / (100 + TIM del día anterior al inicio)) − monto.
+ *
+ * Por factura, un tramo por cada saldo:
+ *  · la mora empieza el día siguiente al vencimiento + los días de gracia (fecha de inicio de la calculadora);
+ *  · cada cobro, retención o nota de crédito aplicada cierra el tramo ESE día (fecha de cierre = fecha de pago,
+ *    como al cargarla en la calculadora) y el saldo nuevo corre desde el día siguiente; una ND suma igual;
+ *  · se redondea al centavo por tramo.
  */
 import { sumarDias } from '@/lib/periodo-argentina'
 
 export type PuntoSerie = { fecha: string; valor: number }
 /** Movimiento del saldo de una factura: + nota de débito; − nota de crédito, cobro o retención aplicada. */
 export type Movimiento = { fecha: string; importe_c: number }
-/** Corrección de la tasa publicada: tasa × factor + puntos (en puntos porcentuales anuales). */
-export type Correccion = { factor: number; puntos: number }
-export type TramoInteres = { desde: string; hasta: string; dias: number; saldo_c: number; tasa_promedio: number; interes_c: number }
-export type ResultadoInteres = { desde: string; hasta: string; tramos: TramoInteres[]; interes_c: number; dias_mora: number; dias_sin_tasa: number }
+export type TramoInteres = { desde: string; hasta: string; dias: number; saldo_c: number; coeficiente: number; tna_equivalente: number; interes_c: number }
+export type ResultadoInteres = { desde: string; hasta: string; tramos: TramoInteres[]; interes_c: number; dias_mora: number; sin_dato: boolean }
 
-const MAX_DIAS = 3700 // ~10 años: tope de seguridad del recorrido día por día
-
-export const SIN_CORRECCION: Correccion = { factor: 1, puntos: 0 }
-export const corregirTasa = (valor: number, c: Correccion) => valor * c.factor + c.puntos
+const DIA = 86400000
+const dias = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / DIA)
 
 /** Serie limpia y ordenada por fecha (ascendente), sin fechas repetidas. */
 export function ordenarSerie(serie: PuntoSerie[]): PuntoSerie[] {
@@ -34,8 +32,8 @@ export function ordenarSerie(serie: PuntoSerie[]): PuntoSerie[] {
   return Array.from(porFecha, ([fecha, valor]) => ({ fecha, valor })).sort((a, b) => a.fecha.localeCompare(b.fecha))
 }
 
-/** Valor publicado el último día hábil hasta `fecha` (la serie, ordenada); null si la serie empieza después. */
-export function tasaDelDia(serie: PuntoSerie[], fecha: string): number | null {
+/** Valor publicado ese día o, si todavía no hay, el último anterior (la serie, ordenada); null si empieza después. */
+export function valorDelDia(serie: PuntoSerie[], fecha: string): number | null {
   let lo = 0, hi = serie.length - 1, r = -1
   while (lo <= hi) {
     const m = (lo + hi) >> 1
@@ -44,37 +42,38 @@ export function tasaDelDia(serie: PuntoSerie[], fecha: string): number | null {
   return r >= 0 ? serie[r].valor : null
 }
 
-/** Interés por mora de una factura, día por día, con la tasa variable corregida. */
-export function interesConTasaVariable(o: {
-  total_c: number; vencimiento: string; graciaDias?: number; movimientos: Movimiento[]; hasta: string; serie: PuntoSerie[]; correccion?: Correccion
-}): ResultadoInteres {
+/** Coeficiente de la TIM entre una fecha de inicio y una de cierre (ambas incluidas), como la calculadora del BCRA. */
+export function coeficienteTim(serie: PuntoSerie[], inicio: string, cierre: string): number | null {
+  const a = valorDelDia(serie, sumarDias(inicio, -1)), b = valorDelDia(serie, cierre)
+  return a == null || b == null ? null : (100 + b) / (100 + a)
+}
+
+/** Interés por mora de una factura con la TIM, por tramos de saldo. */
+export function interesConTim(o: { total_c: number; vencimiento: string; graciaDias?: number; movimientos: Movimiento[]; hasta: string; serie: PuntoSerie[] }): ResultadoInteres {
   const desde = sumarDias(o.vencimiento, Math.max(0, Math.trunc(o.graciaDias ?? 0)) + 1)
-  const res: ResultadoInteres = { desde, hasta: o.hasta, tramos: [], interes_c: 0, dias_mora: 0, dias_sin_tasa: 0 }
+  const res: ResultadoInteres = { desde, hasta: o.hasta, tramos: [], interes_c: 0, dias_mora: 0, sin_dato: false }
   if (o.hasta < desde) return res
-  const correccion = o.correccion ?? SIN_CORRECCION
   const movs = [...o.movimientos].sort((a, b) => a.fecha.localeCompare(b.fecha))
-  let saldo = Number(o.total_c)
-  let i = 0
-  let t: { desde: string; hasta: string; dias: number; saldo_c: number; sumaTasa: number; interes: number } | null = null
-  const cerrar = () => {
-    if (t) {
-      const interes_c = Math.round(t.interes)
-      res.tramos.push({ desde: t.desde, hasta: t.hasta, dias: t.dias, saldo_c: t.saldo_c, tasa_promedio: Math.round((t.sumaTasa / t.dias) * 10000) / 10000, interes_c })
-      res.interes_c += interes_c
-    }
-    t = null
+  // Lo movido antes del primer día de mora ya está en el saldo inicial.
+  let saldo = Number(o.total_c) + movs.filter(m => m.fecha < desde).reduce((s, m) => s + Number(m.importe_c), 0)
+  let inicio = desde
+  const tramo = (cierre: string) => {
+    if (saldo <= 0 || cierre < inicio) return
+    const k = coeficienteTim(o.serie, inicio, cierre)
+    if (k == null) { res.sin_dato = true; return }
+    const n = dias(inicio, cierre) + 1
+    const interes_c = Math.round(saldo * (k - 1))
+    res.tramos.push({ desde: inicio, hasta: cierre, dias: n, saldo_c: saldo, coeficiente: Math.round(k * 1e8) / 1e8, tna_equivalente: Math.round(((k - 1) * 36500 / n) * 100) / 100, interes_c })
+    res.interes_c += interes_c
+    res.dias_mora += n
   }
-  let d = desde
-  for (let n = 0; d <= o.hasta && n < MAX_DIAS; n++, d = sumarDias(d, 1)) {
-    while (i < movs.length && movs[i].fecha <= d) { saldo += Number(movs[i].importe_c); i++ }
-    if (saldo <= 0) { cerrar(); continue }
-    const publicada = tasaDelDia(o.serie, d)
-    if (publicada == null) { res.dias_sin_tasa++; cerrar(); continue }
-    const tasa = corregirTasa(publicada, correccion)
-    res.dias_mora++
-    if (!t || t.saldo_c !== saldo) { cerrar(); t = { desde: d, hasta: d, dias: 0, saldo_c: saldo, sumaTasa: 0, interes: 0 } }
-    t.hasta = d; t.dias++; t.sumaTasa += tasa; t.interes += (saldo * tasa) / 36500
+  // Cada fecha con movimientos dentro de la mora cierra el tramo ese día; el saldo nuevo corre desde el siguiente.
+  const fechas = Array.from(new Set(movs.filter(m => m.fecha >= desde && m.fecha < o.hasta).map(m => m.fecha))).sort()
+  for (const f of fechas) {
+    tramo(f)
+    saldo += movs.filter(m => m.fecha === f).reduce((s, m) => s + Number(m.importe_c), 0)
+    inicio = sumarDias(f, 1)
   }
-  cerrar()
+  tramo(o.hasta)
   return res
 }
