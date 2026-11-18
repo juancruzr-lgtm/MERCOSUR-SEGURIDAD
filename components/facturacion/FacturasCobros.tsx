@@ -2,13 +2,18 @@
 // Cobranzas → Facturas y cobros: todas las facturas en orden cronológico con su estado de cobro.
 // Tocar una factura abre su detalle (datos, notas de crédito, cobros aplicados, historial, PDF) y permite
 // registrar el pago ahí mismo. Sólo lee; registrar el pago usa las mismas funciones que la cuenta corriente.
+// Intereses por mora: informativos, para avisarle al cliente (lib/facturacion/intereses-cobranzas); a la fecha si
+// la factura sigue impaga, con los días cerrados el día del pago si ya se cobró. Se pueden marcar "no cobrar".
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api, leer, rpc } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
-import { ETIQUETA_ESTADO, conVencimiento, detalleVencimiento, estadoCobro, vencimientoDe, type EstadoCobro } from '@/lib/facturacion/estado-cobro'
+import { ETIQUETA_ESTADO, conVencimiento, detalleVencimiento, estadoCobro, vencimientoDe, type CondicionesPago, type EstadoCobro } from '@/lib/facturacion/estado-cobro'
 import { cargarCondicionesPago } from '@/lib/facturacion/condiciones-pago'
+import { totalIntereses, useIntereses, type InteresFactura } from '@/lib/facturacion/intereses-cobranzas'
+import { describirTasa } from '@/lib/facturacion/tasa-mora'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
+import { AMBAR, CeldaInteres, DetalleInteres } from './InteresFactura'
 
 const importeTexto = (c: number) => (c / 100).toFixed(2).replace('.', ',')
 const FILTROS: Array<[string, string]> = [['todas', 'Todas'], ['impagas', 'Impagas'], ['vencidas', 'Vencidas'], ['pagadas', 'Pagadas']]
@@ -30,11 +35,13 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
   const [buscar, setBuscar] = useState('')
   const [recientes, setRecientes] = useState(false)
   const [abierta, setAbierta] = useState<string | null>(null)
+  const [cond, setCond] = useState<CondicionesPago | null>(null)
+  const [recarga, setRecarga] = useState(0)
   const { ocupado, correr, Mensaje } = useAccion()
   const hoy = fechaArgentina()
 
   async function cargar() {
-    const [s, c, a, co, cond] = await Promise.all([
+    const [s, c, a, co, cnd] = await Promise.all([
       leer('fact_v_saldos', q => q.order('fecha_emision').order('punto_venta').order('numero').limit(5000)),
       leer('fact_clientes', q => q.order('razon_social'), 'id, razon_social, cuit'),
       leer('fact_aplicaciones', q => q.is('revertida_at', null).limit(10000), 'id, cobro_id, retencion_id, comprobante_id, importe_c, created_at'),
@@ -42,9 +49,12 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
       cargarCondicionesPago(),
     ])
     // Vencimiento según el contrato vigente: si cambia el plazo, cambia solo.
-    setFilas(conVencimiento(s, cond)); setClientes(c); setAps(a); setCobros(co)
+    setFilas(conVencimiento(s, cnd)); setCond(cnd); setClientes(c); setAps(a); setCobros(co)
   }
   useEffect(() => { correr(cargar) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Intereses por mora informativos a hoy (tasa general o la del contrato).
+  const intereses = useIntereses(filas, cond, hoy, recarga)
+  const recargarTodo = () => { correr(cargar); setRecarga(x => x + 1) }
 
   const nombre = (id: string | null) => clientes.find(c => c.id === id)?.razon_social ?? 'sin cliente'
   const cobroPorId = useMemo(() => new Map(cobros.map(c => [c.id, c])), [cobros])
@@ -69,7 +79,14 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
     vencido: suma(f => f.estado === 'vencida' || f.estado === 'parcial'),
     porVencer: suma(f => f.estado === 'por_vencer'),
     retenciones: suma(f => f.estado === 'cobrada_retenciones'),
+    intereses: totalIntereses(base.map(f => f.comprobante_id), intereses.porFactura),
   }
+  const tarjetas: Array<[string, string, string, string?]> = [
+    ['Facturado', pesos(kpi.facturado), '#e2e8f0'], ['Cobrado', pesos(kpi.cobrado), '#4ade80'], ['Vencido sin cobrar', pesos(kpi.vencido), '#f87171'],
+    ['Por vencer', pesos(kpi.porVencer), '#93c5fd'], ['Retenciones a certificar', pesos(kpi.retenciones), '#a3e635'],
+    ['Intereses por mora (informativo)', intereses.cargando ? '…' : pesos(kpi.intereses), AMBAR,
+      intereses.error ?? (intereses.general ? `Tasa general: ${describirTasa(intereses.general)}` : undefined)],
+  ]
 
   return (
     <div style={S.card}>
@@ -84,17 +101,17 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, margin: '12px 0' }}>
-        {[['Facturado', kpi.facturado, '#e2e8f0'], ['Cobrado', kpi.cobrado, '#4ade80'], ['Vencido sin cobrar', kpi.vencido, '#f87171'],
-          ['Por vencer', kpi.porVencer, '#93c5fd'], ['Retenciones a certificar', kpi.retenciones, '#a3e635']].map(([t, v, c]) => (
-          <div key={t as string} style={{ background: '#0a0e1a', border: '1px solid #1e293b', borderRadius: 8, padding: '8px 12px' }}>
-            <div style={S.sub}>{t as string}</div><div style={{ fontSize: 18, fontWeight: 700, color: c as string }}>{pesos(v)}</div>
+        {tarjetas.map(([t, v, c, nota]) => (
+          <div key={t} style={{ background: '#0a0e1a', border: '1px solid #1e293b', borderRadius: 8, padding: '8px 12px' }}>
+            <div style={S.sub}>{t}</div><div style={{ fontSize: 18, fontWeight: 700, color: c }}>{v}</div>
+            {nota && <div style={{ ...S.sub, fontSize: 11 }}>{nota}</div>}
           </div>))}
       </div>
 
       {/* Lista con su propia barra de desplazamiento: el encabezado queda fijo arriba. */}
       <div style={{ overflow: 'auto', maxHeight: '60vh', border: '1px solid #1e293b', borderRadius: 8 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>{['Fecha', 'Comprobante', 'Cliente', 'Total', 'Cobrado', 'Saldo', 'Vence', 'Estado', 'Pagada el'].map(h =>
+          <thead><tr>{['Fecha', 'Comprobante', 'Cliente', 'Total', 'Cobrado', 'Saldo', 'Vence', 'Estado', 'Pagada el', 'Interés por mora'].map(h =>
             <th key={h} style={{ ...S.th, position: 'sticky', top: 0, zIndex: 1, background: '#0f1629' }}>{h}</th>)}</tr></thead>
           <tbody>{visibles.map(f => {
             const et = ETIQUETA_ESTADO[f.estado as EstadoCobro], abiertaEsta = abierta === f.comprobante_id
@@ -111,10 +128,12 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
                   <td style={S.td}><span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 999, border: `1px solid ${et.color}`, color: et.color, fontSize: 12, whiteSpace: 'nowrap' }}>
                     {et.texto}{(f.estado === 'vencida' || f.estado === 'parcial') && f.diasVencida > 0 ? ` · ${f.diasVencida} d` : ''}</span></td>
                   <td style={S.td}>{fecha(ultimoCobro(f.comprobante_id))}</td>
+                  <td style={S.num}><CeldaInteres i={intereses.porFactura?.get(f.comprobante_id)} cargando={intereses.cargando} /></td>
                 </tr>
-                {abiertaEsta && <tr><td colSpan={9} style={{ padding: 0 }}>
+                {abiertaEsta && <tr><td colSpan={10} style={{ padding: 0 }}>
                   <DetalleFactura f={f} nombreCliente={nombre(f.cliente_id)} aps={aps.filter(a => a.comprobante_id === f.comprobante_id)} cobroPorId={cobroPorId}
-                    alCambiar={() => correr(cargar)} alVerCliente={() => alVerCliente(f.cliente_id)} />
+                    alCambiar={recargarTodo} alVerCliente={() => alVerCliente(f.cliente_id)}
+                    interes={intereses.porFactura?.get(f.comprobante_id)} cargandoInteres={intereses.cargando} alCambiarInteres={() => setRecarga(x => x + 1)} />
                 </td></tr>}
               </Fragment>
             )
@@ -123,12 +142,14 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
         {!visibles.length && !ocupado && <div style={{ ...S.sub, marginTop: 8 }}>No hay facturas con esos filtros.</div>}
       </div>
       <div style={{ ...S.sub, marginTop: 8 }}>{visibles.length} facturas. Tocá una para ver el detalle y registrar el pago. «Faltan retenciones»: se cobró y lo que resta (hasta 25 %) suele ser IVA, Ganancias, IIBB o SUSS retenidos; se cierra cargando los certificados.</div>
+      <div style={{ ...S.sub, marginTop: 4 }}>Interés por mora: informativo, para avisarle al cliente; no se registra ni se factura solo. Si la factura sigue impaga es lo acumulado a hoy; si ya se pagó, los días quedan cerrados el día del pago. Tachado: marcado «no cobrar».</div>
     </div>
   )
 }
 
-function DetalleFactura({ f, nombreCliente, aps, cobroPorId, alCambiar, alVerCliente }: {
+function DetalleFactura({ f, nombreCliente, aps, cobroPorId, alCambiar, alVerCliente, interes, cargandoInteres, alCambiarInteres }: {
   f: any; nombreCliente: string; aps: any[]; cobroPorId: Map<string, any>; alCambiar: () => void; alVerCliente: () => void
+  interes: InteresFactura | undefined; cargandoInteres: boolean; alCambiarInteres: () => void
 }) {
   const [comp, setComp] = useState<any>(null)
   const [notas, setNotas] = useState<any[]>([])
@@ -171,6 +192,7 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, alCambiar, alVerCli
             const c = a.cobro_id ? cobroPorId.get(a.cobro_id) : null
             return <div key={a.id}>{c ? `${fecha(c.fecha)} · ${c.medio}${c.cheque_numero ? ` n° ${c.cheque_numero}` : ''}${c.cheque_estado ? ` (${c.cheque_estado})` : ''}${c.referencia ? ` · ${c.referencia}` : ''}` : 'Retención'} · <b>{pesos(a.importe_c)}</b></div>
           }) : <div style={S.sub}>Sin cobros registrados.</div>}
+          <DetalleInteres comprobanteId={f.comprobante_id} i={interes} cargando={cargandoInteres} alCambiar={alCambiarInteres} />
           {hist.length > 0 && <details style={{ marginTop: 8 }}><summary style={S.sub}>Historial ({hist.length})</summary>
             {hist.map(h => <div key={h.id} style={S.sub}>{new Date(h.at).toLocaleString('es-AR')} · {h.accion}{h.datos?.motivo ? ` · ${h.datos.motivo}` : ''}</div>)}</details>}
         </div>
