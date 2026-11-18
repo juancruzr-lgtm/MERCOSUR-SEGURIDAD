@@ -7,7 +7,8 @@ import { conVencimiento, type CondicionesPago, type ContratoPago, type FacturaPa
 
 const PAGINA = 1000 // PostgREST corta en 1000 filas sin avisar
 
-async function leerTodo<T = any>(tabla: string, campos: string, orden: string, filtro: (q: any) => any = q => q): Promise<T[]> {
+/** Todas las filas de una tabla, de a 1000 (ordenadas por `orden` para que las páginas no se pisen). */
+export async function leerTodo<T = any>(tabla: string, campos: string, orden: string, filtro: (q: any) => any = q => q): Promise<T[]> {
   const out: T[] = []
   for (let desde = 0; ; desde += PAGINA) {
     const pagina = await leer<T>(tabla, q => filtro(q).order(orden).range(desde, desde + PAGINA - 1), campos)

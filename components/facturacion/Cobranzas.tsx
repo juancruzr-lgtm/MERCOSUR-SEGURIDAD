@@ -11,6 +11,7 @@ import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import FacturasCobros from './FacturasCobros'
 import ClientesDeuda from './ClientesDeuda'
+import InteresesBadlar from './InteresesBadlar'
 
 /** Centavos → texto para los campos de importe (1234567 → "12345,67"), el formato que lee centavosDe. */
 const importeTexto = (c: number) => (c / 100).toFixed(2).replace('.', ',')
@@ -22,15 +23,16 @@ export default function Cobranzas() {
   useEffect(() => { correr(async () => setClientes(await leer('fact_clientes', q => q.order('razon_social'), 'id, razon_social, cuit'))) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Vistas de Cobranzas: la lista general de facturas es la principal; se irán sumando más.
-  const [vista, setVista] = useState<'facturas' | 'cuenta' | 'banco'>('facturas')
+  const [vista, setVista] = useState<'facturas' | 'cuenta' | 'intereses' | 'banco'>('facturas')
 
   return (
     <div>
       <div style={{ ...S.fila, marginBottom: 12 }}>
-        {([['facturas', 'Facturas y cobros'], ['cuenta', 'Cuenta por cliente'], ['banco', 'Conciliación bancaria']] as const).map(([k, t]) =>
+        {([['facturas', 'Facturas y cobros'], ['cuenta', 'Cuenta por cliente'], ['intereses', 'Intereses por mora (BADLAR)'], ['banco', 'Conciliación bancaria']] as const).map(([k, t]) =>
           <button key={k} style={vista === k ? S.btn : S.btn2} onClick={() => setVista(k)}>{t}</button>)}
       </div>
       {vista === 'facturas' && <FacturasCobros alVerCliente={id => { setCli(id); setVista('cuenta') }} />}
+      {vista === 'intereses' && <InteresesBadlar />}
       {vista === 'banco' && <Conciliacion clientes={clientes} />}
       {vista === 'cuenta' && <div style={S.card}>
         {!cli && <ClientesDeuda clientes={clientes} alElegir={setCli} />}
