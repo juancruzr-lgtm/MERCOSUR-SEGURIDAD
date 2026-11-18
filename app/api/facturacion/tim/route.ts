@@ -1,11 +1,11 @@
-// GET ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD — serie diaria de la tasa BADLAR de bancos privados del BCRA.
+// GET ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD — serie diaria de la Tasa de Intereses Moratorios (TIM) del BCRA.
 //
 // Sólo lectura: la usa el cálculo de intereses por mora de Cobranzas, que no registra ni emite nada.
-// Se pide desde el servidor (sin depender de CORS del BCRA) y se cachea 6 horas: el BCRA publica una vez
-// por día hábil. Sólo Gerencia o Administración (facturacion_puede_actual).
+// Se pide desde el servidor (sin depender de CORS del BCRA) y se cachea 6 horas: el BCRA la publica una vez
+// por día. Sólo Gerencia o Administración (facturacion_puede_actual).
 import type { NextRequest } from 'next/server'
 import { clientesDelPedido } from '@/app/api/documentacion/_clientes'
-import { BADLAR_DESCRIPCION, BADLAR_VARIABLE, PAGINA_BCRA, parsearSerieBcra, urlSerieBcra } from '@/lib/facturacion/badlar'
+import { PAGINA_BCRA, TIM_DESCRIPCION, TIM_VARIABLE, parsearSerieBcra, urlSerieBcra } from '@/lib/facturacion/serie-bcra'
 import { ordenarSerie, type PuntoSerie } from '@/lib/facturacion/intereses-variables'
 import { responder } from '../_comun'
 
@@ -28,16 +28,16 @@ export async function GET(req: NextRequest) {
   try {
     const puntos: PuntoSerie[] = []
     for (let pagina = 0, offset = 0, total = Infinity; offset < total && pagina < MAX_PAGINAS; pagina++, offset += PAGINA_BCRA) {
-      const r = await fetch(urlSerieBcra(BADLAR_VARIABLE, desde, hasta, offset), { headers: { Accept: 'application/json' }, next: { revalidate: 21600 } } as RequestInit)
-      if (!r.ok) return responder({ error: `El BCRA respondió ${r.status} al pedir la BADLAR` }, 502)
+      const r = await fetch(urlSerieBcra(TIM_VARIABLE, desde, hasta, offset), { headers: { Accept: 'application/json' }, next: { revalidate: 21600 } } as RequestInit)
+      if (!r.ok) return responder({ error: `El BCRA respondió ${r.status} al pedir la TIM` }, 502)
       const p = parsearSerieBcra(await r.json())
       puntos.push(...p.puntos)
       total = p.total
       if (!p.puntos.length) break
     }
     const serie = ordenarSerie(puntos)
-    return responder({ serie, fuente: BADLAR_DESCRIPCION, variable: BADLAR_VARIABLE, ultima: serie[serie.length - 1] ?? null })
+    return responder({ serie, fuente: TIM_DESCRIPCION, variable: TIM_VARIABLE, ultima: serie[serie.length - 1] ?? null })
   } catch (e: any) {
-    return responder({ error: `No se pudo consultar la BADLAR al BCRA: ${e?.message ?? e}` }, 502)
+    return responder({ error: `No se pudo consultar la TIM al BCRA: ${e?.message ?? e}` }, 502)
   }
 }

@@ -1,10 +1,12 @@
-// Serie diaria de la tasa BADLAR de bancos privados (% nominal anual) que publica el BCRA en su API de
-// estadísticas monetarias v4.0, variable 7 ("Tasa de interés BADLAR de bancos privados", en porcentaje
-// nominal anual; verificado el 18/11/2026: la v3 responde 410). Sólo lectura.
+// Series de la API de estadísticas monetarias v4.0 del BCRA (sólo lectura). La que se usa:
+// Tasa de Intereses Moratorios (TIM), CCyC art. 768 inc. c: variable 1197, índice diario acumulado, publicado
+// todos los días (verificado el 18/11/2026; es la misma serie y la misma URL que usa la calculadora oficial
+// del BCRA). La v3 de la API responde 410.
 import { ordenarSerie, type PuntoSerie } from './intereses-variables'
 
-export const BADLAR_VARIABLE = 7
-export const BADLAR_DESCRIPCION = 'Tasa BADLAR de bancos privados (BCRA, % nominal anual)'
+export const TIM_VARIABLE = 1197
+export const TIM_DESCRIPCION = 'Tasa de Intereses Moratorios (TIM) del BCRA, Código Civil y Comercial art. 768 inc. c'
+export const CALCULADORA_TIM = 'https://www.bcra.gob.ar/calculadora-de-tasa-de-intereses-moratorios-tim/'
 export const PAGINA_BCRA = 3000
 
 export function urlSerieBcra(variable: number, desde: string, hasta: string, offset = 0): string {

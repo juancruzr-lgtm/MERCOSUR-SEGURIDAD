@@ -11,7 +11,7 @@ import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import FacturasCobros from './FacturasCobros'
 import ClientesDeuda from './ClientesDeuda'
-import InteresesBadlar from './InteresesBadlar'
+import InteresesMora from './InteresesMora'
 
 /** Centavos → texto para los campos de importe (1234567 → "12345,67"), el formato que lee centavosDe. */
 const importeTexto = (c: number) => (c / 100).toFixed(2).replace('.', ',')
@@ -28,11 +28,11 @@ export default function Cobranzas() {
   return (
     <div>
       <div style={{ ...S.fila, marginBottom: 12 }}>
-        {([['facturas', 'Facturas y cobros'], ['cuenta', 'Cuenta por cliente'], ['intereses', 'Intereses por mora (BADLAR)'], ['banco', 'Conciliación bancaria']] as const).map(([k, t]) =>
+        {([['facturas', 'Facturas y cobros'], ['cuenta', 'Cuenta por cliente'], ['intereses', 'Intereses por mora (TIM)'], ['banco', 'Conciliación bancaria']] as const).map(([k, t]) =>
           <button key={k} style={vista === k ? S.btn : S.btn2} onClick={() => setVista(k)}>{t}</button>)}
       </div>
       {vista === 'facturas' && <FacturasCobros alVerCliente={id => { setCli(id); setVista('cuenta') }} />}
-      {vista === 'intereses' && <InteresesBadlar />}
+      {vista === 'intereses' && <InteresesMora />}
       {vista === 'banco' && <Conciliacion clientes={clientes} />}
       {vista === 'cuenta' && <div style={S.card}>
         {!cli && <ClientesDeuda clientes={clientes} alElegir={setCli} />}
