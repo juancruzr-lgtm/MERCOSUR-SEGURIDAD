@@ -216,7 +216,16 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
   }
 
   return (
-    <div style={S.card}>
+    <div style={{ ...S.card, position: 'relative' }}>
+      {ocupado && (
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,14,26,0.6)', zIndex: 10, borderRadius: 10, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 18 }}>
+          <style>{'@keyframes lf-spin{to{transform:rotate(360deg)}}'}</style>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#1e293b', color: '#e2e8f0', padding: '10px 18px', borderRadius: 8, border: '1px solid #3b82f6', fontSize: 14, fontWeight: 600, boxShadow: '0 6px 20px rgba(0,0,0,0.45)' }}>
+            <span style={{ width: 16, height: 16, border: '2px solid #475569', borderTopColor: '#60a5fa', borderRadius: '50%', display: 'inline-block', animation: 'lf-spin 0.7s linear infinite' }} />
+            Procesando… esperá, no cierres ni vuelvas a tocar
+          </div>
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <div>
           <strong>{f.baja.nombre ?? f.baja.cuil}</strong> <span style={S.sub}>CUIL {f.baja.cuil ?? '—'} · v{f.version} · {ESTADO_TXT[f.estado]}</span>
