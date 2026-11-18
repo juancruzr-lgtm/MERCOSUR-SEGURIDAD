@@ -270,9 +270,9 @@ function DetalleFinal({ finalId, onCambio }: { finalId: string; onCambio: () => 
                   {edit?.codigo === l.codigo ? (
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                       <input style={{ ...S.input, width: 110, padding: '4px 8px' }} inputMode="decimal" autoFocus value={edit.importe} onChange={e => setEdit({ ...edit, importe: e.target.value })} />
-                      <input style={{ ...S.input, width: 170, padding: '4px 8px' }} placeholder="Motivo (obligatorio)" value={edit.motivo} onChange={e => setEdit({ ...edit, motivo: e.target.value })} />
-                      <button style={{ ...S.btn2, padding: '2px 8px' }} disabled={ocupado || edit.motivo.trim().length < 3 || numOrNull(edit.importe) == null} onClick={() => {
-                        const nuevos = [...ajustes.filter(a => a.codigo !== l.codigo), { codigo: l.codigo, cantidad: l.cantidad ?? null, importe: numOrNull(edit.importe), motivo: edit.motivo.trim() }]
+                      <input style={{ ...S.input, width: 170, padding: '4px 8px' }} placeholder="Motivo (opcional)" value={edit.motivo} onChange={e => setEdit({ ...edit, motivo: e.target.value })} />
+                      <button style={{ ...S.btn2, padding: '2px 8px' }} disabled={ocupado || numOrNull(edit.importe) == null} onClick={() => {
+                        const nuevos = [...ajustes.filter(a => a.codigo !== l.codigo), { codigo: l.codigo, cantidad: l.cantidad ?? null, importe: numOrNull(edit.importe), motivo: edit.motivo.trim() || 'corregido a mano en la pantalla' }]
                         setAjustes(nuevos); setEdit(null); void guardarEntradas({ ajustes: nuevos })
                       }}>Aplicar</button>
                       <button style={{ ...S.btn2, padding: '2px 8px' }} onClick={() => setEdit(null)}>Cancelar</button>
