@@ -5,7 +5,8 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api, leer, rpc } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
-import { ETIQUETA_ESTADO, estadoCobro, vencimientoDe, type EstadoCobro } from '@/lib/facturacion/estado-cobro'
+import { ETIQUETA_ESTADO, conVencimiento, detalleVencimiento, estadoCobro, vencimientoDe, type EstadoCobro } from '@/lib/facturacion/estado-cobro'
+import { cargarCondicionesPago } from '@/lib/facturacion/condiciones-pago'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 
@@ -33,13 +34,15 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
   const hoy = fechaArgentina()
 
   async function cargar() {
-    const [s, c, a, co] = await Promise.all([
+    const [s, c, a, co, cond] = await Promise.all([
       leer('fact_v_saldos', q => q.order('fecha_emision').order('punto_venta').order('numero').limit(5000)),
       leer('fact_clientes', q => q.order('razon_social'), 'id, razon_social, cuit'),
       leer('fact_aplicaciones', q => q.is('revertida_at', null).limit(10000), 'id, cobro_id, retencion_id, comprobante_id, importe_c, created_at'),
       leer('fact_cobros', q => q.is('anulado_at', null).limit(10000), 'id, fecha, medio, importe_c, referencia, cheque_numero, cheque_banco, cheque_estado'),
+      cargarCondicionesPago(),
     ])
-    setFilas(s); setClientes(c); setAps(a); setCobros(co)
+    // Vencimiento según el contrato vigente: si cambia el plazo, cambia solo.
+    setFilas(conVencimiento(s, cond)); setClientes(c); setAps(a); setCobros(co)
   }
   useEffect(() => { correr(cargar) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -156,7 +159,8 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, alCambiar, alVerCli
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginTop: 8, fontSize: 13 }}>
         <div>
           <h4 style={S.sub}>DATOS</h4>
-          <div>Emitida {fecha(f.fecha_emision)} · vence {fecha(f.vto)}{!f.vto_pago && <span style={S.sub}> (emisión + 30 días)</span>}</div>
+          <div>Emitida {fecha(f.fecha_emision)} · vence {fecha(f.vto)} <span style={S.sub}>({detalleVencimiento(f)})</span>
+            {f.vto_pago && f.vto_pago !== f.vto && <span style={S.sub}> · la factura informó {fecha(f.vto_pago)}</span>}</div>
           {comp && <div>Neto {pesos(comp.neto_c)} · IVA {pesos(comp.iva_c)} · <b>Total {pesos(comp.total_c)}</b></div>}
           {comp?.servicio_desde && <div>Servicio {fecha(comp.servicio_desde)} al {fecha(comp.servicio_hasta)}</div>}
           {comp?.cae && <div style={S.sub}>CAE {comp.cae} · {comp.origen === 'emision_app' ? 'emitida por la app' : 'importada de ARCA'}</div>}

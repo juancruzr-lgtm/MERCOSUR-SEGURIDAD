@@ -5,6 +5,8 @@
 import { useEffect, useState } from 'react'
 import { abrirDocumento, api, leer, rpc, subirDocumento } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
+import { conVencimiento, detalleVencimiento, vencimientoDe } from '@/lib/facturacion/estado-cobro'
+import { cargarCondicionesPago } from '@/lib/facturacion/condiciones-pago'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import FacturasCobros from './FacturasCobros'
@@ -147,13 +149,16 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
   const { ocupado, correr, Mensaje } = useAccion()
 
   async function cargar() {
-    const [saldos, cobros, rets, si2] = await Promise.all([
+    const [saldosArca, cobros, rets, si2, cond] = await Promise.all([
       // Todas las facturas del cliente (pagas e impagas), por fecha de emisión y número.
       leer('fact_v_saldos', q => q.eq('cliente_id', clienteId).order('fecha_emision').order('punto_venta').order('numero')),
       leer('fact_cobros', q => q.eq('cliente_id', clienteId).order('fecha')),
       leer('fact_retenciones', q => q.eq('cliente_id', clienteId).order('fecha')),
       leer('fact_saldos_iniciales', q => q.eq('cliente_id', clienteId)),
+      cargarCondicionesPago(),
     ])
+    // Vencimiento según el contrato vigente del cliente (si cambia el plazo, cambia solo).
+    const saldos = conVencimiento(saldosArca, cond)
     const ids = [...cobros.map(c => c.id), ...rets.map(r => r.id)]
     const aps = ids.length ? await leer('fact_aplicaciones', q => q.or(`cobro_id.in.(${cobros.map(c => c.id).join(',') || '00000000-0000-0000-0000-000000000000'}),retencion_id.in.(${rets.map(r => r.id).join(',') || '00000000-0000-0000-0000-000000000000'})`).order('created_at')) : []
     setD({ saldos, cobros, rets, aps, si: si2 })
@@ -199,7 +204,7 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
           <h4 style={S.sub}>COMPROBANTES</h4>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>
             {d.saldos.map(s => <tr key={s.comprobante_id} onClick={() => elegirFactura(s)} title={Number(s.saldo_c) > 0 ? 'Tocá para cargar un cobro de esta factura' : undefined}
-              style={{ cursor: Number(s.saldo_c) > 0 ? 'pointer' : undefined, background: s.comprobante_id === selFac ? '#1e3a5f' : undefined }}><td style={S.td}>{nv(s)}</td><td style={S.td}>{fecha(s.fecha_emision)}<div style={S.sub}>vence {fecha(s.vto_pago)}</div></td>
+              style={{ cursor: Number(s.saldo_c) > 0 ? 'pointer' : undefined, background: s.comprobante_id === selFac ? '#1e3a5f' : undefined }}><td style={S.td}>{nv(s)}</td><td style={S.td}>{fecha(s.fecha_emision)}<div style={S.sub} title={detalleVencimiento(s)}>vence {fecha(vencimientoDe(s))}</div></td>
               <td style={S.num}>{pesos(s.total_c)}{Number(s.nc_c) > 0 && <div style={S.sub}>NC {pesos(s.nc_c)}</div>}</td>
               <td style={S.num}>{Number(s.saldo_c) <= 0 ? <span style={{ color: '#4ade80' }}>{Number(s.nc_c) >= Number(s.total_c) ? 'anulada' : 'pagada'}</span> : <b>{pesos(s.saldo_c)}</b>}</td></tr>)}
             {d.si.map(s => <tr key={s.id}><td style={S.td}>Saldo inicial</td><td style={S.td}>{fecha(s.fecha)}</td><td style={S.num}>{pesos(s.importe_c)}</td><td style={S.td}><a href="#" style={{ color: '#93c5fd' }} onClick={e => { e.preventDefault(); correr(() => abrirDocumento(s.documento_id)) }}>respaldo</a></td></tr>)}

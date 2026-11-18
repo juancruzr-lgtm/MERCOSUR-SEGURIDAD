@@ -21,7 +21,7 @@ import CambiosHoras from './CambiosHoras'
 import { recalcular, useOperacion, type Periodo } from './periodo'
 import { nombreDelMes } from '@/lib/facturacion/periodo-seguro'
 import { fechaArgentina, rangoFechasMes } from '@/lib/periodo-argentina'
-import { plazoPagoDias, vtoPagoParaArca } from '@/lib/facturacion/vto-arca'
+import { plazoPagoDias, vtoPagoAlEmitir } from '@/lib/facturacion/vto-arca'
 
 const ESTADOS_FILTRO: Array<[string, string]> = [
   ['para_revisar', 'Para revisar'], ['sin_aceptar', 'Horas sin aceptar'],
@@ -421,7 +421,8 @@ function EmisionManual({ p, alHecho }: { p: any; alHecho: () => Promise<void> })
     <div style={{ border: '1px solid #334155', borderRadius: 8, padding: 10, marginTop: 8 }}>
       <h4 style={S.sub}>1. CARGAR EN “COMPROBANTES EN LÍNEA” DE ARCA CON ESTOS DATOS</h4>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>
-        {datosComprobantesEnLinea(p, { razon_social: p.cliente?.razon_social ?? '', condicion_iva: p.cliente?.condicion_iva ?? null }, pv).map((x, i) => (
+        {datosComprobantesEnLinea(p, { razon_social: p.cliente?.razon_social ?? '', condicion_iva: p.cliente?.condicion_iva ?? null }, pv,
+          { fechaEmision: p.fecha_emision_prevista || hoy, plazoDias: p.contrato?.dias_vencimiento }).map((x, i) => (
           <tr key={i}><td style={{ ...S.td, color: '#64748b' }}>{x.paso}</td><td style={S.td}>{x.campo}</td><td style={{ ...S.td, whiteSpace: 'pre-wrap' }}>{x.valor}</td></tr>
         ))}
       </tbody></table>
@@ -504,9 +505,9 @@ function Detalle({ p, usuarios, config, periodo, alCambiar }: { p: any; usuarios
             <tr><td style={S.td}><b>Neto / IVA / Total</b></td><td style={S.num}>{pesos(p.neto_c)} + {pesos(p.iva_c)}</td><td style={S.num}><b>{pesos(p.total_c)}</b></td></tr>
           </tbody></table>
           <div style={S.sub}>Horas programadas {horas(p.minutos_programados)} · cubiertas {horas(p.minutos_cubiertos)} · aprobadas para facturar {horas(p.minutos_aprobados)} · descubiertas no facturadas {horas(p.minutos_descubiertos)}</div>
-          <div style={S.sub}>Comprobante tipo {p.tipo_comprobante ?? '—'} · PV {p.punto_venta ?? 'el de la configuración'} · vto. de pago informado a ARCA {fecha(p.fecha_vencimiento)}
-            {p.fecha_vencimiento && p.fecha_vencimiento < fechaArgentina() && <> (ya pasó: si se emite hoy, se informa {fecha(vtoPagoParaArca(p.fecha_vencimiento, fechaArgentina(), p.contrato?.dias_vencimiento))}, {plazoPagoDias(p.contrato?.dias_vencimiento)} días desde la emisión, y esa fecha sale en la factura)</>}
-            {' '}(el vencimiento comercial sale del contrato)</div>
+          <div style={S.sub}>Comprobante tipo {p.tipo_comprobante ?? '—'} · PV {p.punto_venta ?? 'el de la configuración'} · vto. de pago: {plazoPagoDias(p.contrato?.dias_vencimiento)} días desde la emisión, según el contrato
+            {' '}(si sale {p.fecha_emision_prevista ? `el ${fecha(p.fecha_emision_prevista)}` : 'hoy'}: {fecha(vtoPagoAlEmitir(p.fecha_emision_prevista || fechaArgentina(), p.contrato?.dias_vencimiento))}).
+            {' '}Es la fecha que se informa a ARCA y sale en la factura; si cambia el plazo del contrato, se toma el nuevo.</div>
           <div style={{ ...S.fila, gap: 6, marginTop: 6, fontSize: 13 }}>
             <span style={S.sub}>Fecha de emisión:</span>
             {/* Vacía = el día en que se emite. ARCA acepta hasta 10 días antes del día de emisión y no antes del

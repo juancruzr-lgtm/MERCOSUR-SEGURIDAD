@@ -6,6 +6,8 @@ import { leer } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { antiguedad, diasPromedioCobro, mesesHasta, proximosVencimientos, serieMensual, type FilaSaldo } from '@/lib/facturacion/tablero-financiero'
 import { fechaArgentina } from '@/lib/periodo-argentina'
+import { conVencimiento } from '@/lib/facturacion/estado-cobro'
+import { cargarCondicionesPago } from '@/lib/facturacion/condiciones-pago'
 import { S, fecha, pesos, useAccion } from './comun'
 
 function Indicador({ t, v, sub, color }: { t: string; v: string; sub?: string; color?: string }) {
@@ -24,13 +26,14 @@ export default function TableroFinanciero({ mes, cliente }: { mes: string; clien
   const hoy = fechaArgentina()
 
   useEffect(() => { correr(async () => {
-    const [s, c, a, cl] = await Promise.all([
+    const [s, c, a, cl, cond] = await Promise.all([
       leer('fact_v_saldos', q => q.limit(5000)),
       leer('fact_cobros', q => q.is('anulado_at', null).limit(10000), 'id, cliente_id, fecha, importe_c, medio, cheque_estado, cheque_fecha_pago, cheque_numero'),
       leer('fact_aplicaciones', q => q.is('revertida_at', null).not('cobro_id', 'is', null).limit(10000), 'cobro_id, comprobante_id, importe_c'),
       leer('fact_clientes', q => q.order('razon_social'), 'id, razon_social'),
+      cargarCondicionesPago(),
     ])
-    setFilas(s); setCobros(c); setAps(a); setClientes(cl)
+    setFilas(conVencimiento(s, cond)); setCobros(c); setAps(a); setClientes(cl)
   }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fs = useMemo(() => filas.filter(f => !cliente || f.cliente_id === cliente), [filas, cliente])
