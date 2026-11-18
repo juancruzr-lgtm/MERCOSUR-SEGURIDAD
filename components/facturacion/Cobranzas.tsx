@@ -2,16 +2,18 @@
 // Cuentas corrientes y conciliación. El extracto bancario se importa como
 // movimientos; las propuestas se aceptan o rechazan a mano. Retenciones
 // estimadas no cancelan; las aplicaciones se revierten con motivo.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { abrirDocumento, api, leer, rpc, subirDocumento } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
-import { conVencimiento, detalleVencimiento, vencimientoDe } from '@/lib/facturacion/estado-cobro'
+import { conVencimiento, detalleVencimiento, vencimientoDe, type CondicionesPago } from '@/lib/facturacion/estado-cobro'
 import { cargarCondicionesPago } from '@/lib/facturacion/condiciones-pago'
+import { textoParaCliente, totalIntereses, useIntereses } from '@/lib/facturacion/intereses-cobranzas'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import FacturasCobros from './FacturasCobros'
 import ClientesDeuda from './ClientesDeuda'
 import InteresesMora from './InteresesMora'
+import { AMBAR } from './InteresFactura'
 
 /** Centavos → texto para los campos de importe (1234567 → "12345,67"), el formato que lee centavosDe. */
 const importeTexto = (c: number) => (c / 100).toFixed(2).replace('.', ',')
@@ -28,7 +30,7 @@ export default function Cobranzas() {
   return (
     <div>
       <div style={{ ...S.fila, marginBottom: 12 }}>
-        {([['facturas', 'Facturas y cobros'], ['cuenta', 'Cuenta por cliente'], ['intereses', 'Intereses por mora (TIM)'], ['banco', 'Conciliación bancaria']] as const).map(([k, t]) =>
+        {([['facturas', 'Facturas y cobros'], ['cuenta', 'Cuenta por cliente'], ['intereses', 'Intereses por mora'], ['banco', 'Conciliación bancaria']] as const).map(([k, t]) =>
           <button key={k} style={vista === k ? S.btn : S.btn2} onClick={() => setVista(k)}>{t}</button>)}
       </div>
       {vista === 'facturas' && <FacturasCobros alVerCliente={id => { setCli(id); setVista('cuenta') }} />}
@@ -43,7 +45,7 @@ export default function Cobranzas() {
             <select style={S.input} value={cli} onChange={e => setCli(e.target.value)}>{clientes.map(c => <option key={c.id} value={c.id}>{c.razon_social}</option>)}</select>
             <Mensaje />
           </div>
-          {!ocupado && <CuentaCliente clienteId={cli} />}
+          {!ocupado && <CuentaCliente clienteId={cli} nombreCliente={clientes.find(c => c.id === cli)?.razon_social ?? 'Cliente'} />}
         </>}
       </div>}
     </div>
@@ -142,8 +144,9 @@ function Conciliacion({ clientes }: { clientes: any[] }) {
   )
 }
 
-function CuentaCliente({ clienteId }: { clienteId: string }) {
-  const [d, setD] = useState<{ saldos: any[]; cobros: any[]; rets: any[]; aps: any[]; si: any[] }>({ saldos: [], cobros: [], rets: [], aps: [], si: [] })
+function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombreCliente: string }) {
+  const [d, setD] = useState<{ saldos: any[]; cobros: any[]; rets: any[]; aps: any[]; si: any[]; cond: CondicionesPago | null }>({ saldos: [], cobros: [], rets: [], aps: [], si: [], cond: null })
+  const primeraCarga = useRef(true)
   const [cobro, setCobro] = useState({ fecha: '', importe: '', medio: 'transferencia', referencia: '', es_anticipo: false, cheque_numero: '', cheque_banco: '', cheque_fecha_pago: '' })
   const [ret, setRet] = useState({ impuesto: 'ganancias', certificado: '', fecha: '', importe: '', orden_pago: '', estado: 'certificado_recibido' })
   const [ap, setAp] = useState({ origen: '', destino: '', importe: '' })
@@ -163,13 +166,24 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
     const saldos = conVencimiento(saldosArca, cond)
     const ids = [...cobros.map(c => c.id), ...rets.map(r => r.id)]
     const aps = ids.length ? await leer('fact_aplicaciones', q => q.or(`cobro_id.in.(${cobros.map(c => c.id).join(',') || '00000000-0000-0000-0000-000000000000'}),retencion_id.in.(${rets.map(r => r.id).join(',') || '00000000-0000-0000-0000-000000000000'})`).order('created_at')) : []
-    setD({ saldos, cobros, rets, aps, si: si2 })
+    setD({ saldos, cobros, rets, aps, si: si2, cond })
+    // Después de cargar un cobro, aplicar o revertir, los intereses se recalculan con los pagos nuevos.
+    if (primeraCarga.current) primeraCarga.current = false; else setRecarga(x => x + 1)
   }
   useEffect(() => { correr(cargar) }, [clienteId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const aplicado = (campo: 'cobro_id' | 'retencion_id', id: string) => d.aps.filter(a => a[campo] === id && !a.revertida_at).reduce((s, a) => s + Number(a.importe_c), 0)
   const deuda = d.saldos.reduce((s, x) => s + Math.max(0, Number(x.saldo_c)), 0)
   const nv = (s: any) => numeroVisible({ tipo: s.tipo, puntoVenta: s.punto_venta, numero: Number(s.numero) })
+
+  // Intereses por mora a hoy: informativos, para avisarle al cliente (no se registran ni se facturan solos).
+  const hoy = fechaArgentina()
+  const [recarga, setRecarga] = useState(0)
+  const intereses = useIntereses(d.saldos, d.cond, hoy, recarga)
+  const interesDe = (id: string) => intereses.porFactura?.get(id)
+  const totalInteres = totalIntereses(d.saldos.map(s => s.comprobante_id), intereses.porFactura)
+  const textoCliente = () => textoParaCliente(nombreCliente,
+    d.saldos.flatMap(s => { const i = interesDe(s.comprobante_id); return i ? [{ numero: nv(s), i }] : [] }), hoy)
 
   // Factura tocada en la lista: precarga el cobro y el destino de la aplicación con su saldo.
   const [selFac, setSelFac] = useState<string | null>(null)
@@ -200,7 +214,15 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
   return (
     <div style={{ marginTop: 10 }}>
       <Mensaje />
-      <div style={S.sub}>Deuda en comprobantes: <b style={{ color: '#e2e8f0' }}>{pesos(deuda)}</b></div>
+      <div style={{ ...S.fila, ...S.sub }}>
+        <span>Deuda en comprobantes: <b style={{ color: '#e2e8f0' }}>{pesos(deuda)}</b></span>
+        <span>· Intereses por mora a hoy (informativo): {intereses.cargando ? '…' : <b style={{ color: AMBAR }}>{pesos(totalInteres)}</b>}</span>
+        {!intereses.cargando && totalInteres > 0 && <button style={{ ...S.btn2, padding: '2px 8px' }} onClick={() => correr(async () => {
+          const texto = textoCliente()
+          try { await navigator.clipboard.writeText(texto) } catch { window.prompt('Copiá el detalle para el cliente:', texto); return }
+        }, 'Detalle copiado: pegalo en el correo o el WhatsApp al cliente')}>Copiar detalle para el cliente</button>}
+      </div>
+      {intereses.error && <div style={S.err}>{intereses.error}</div>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16, marginTop: 8 }}>
         <div>
           <h4 style={S.sub}>COMPROBANTES</h4>
@@ -208,7 +230,12 @@ function CuentaCliente({ clienteId }: { clienteId: string }) {
             {d.saldos.map(s => <tr key={s.comprobante_id} onClick={() => elegirFactura(s)} title={Number(s.saldo_c) > 0 ? 'Tocá para cargar un cobro de esta factura' : undefined}
               style={{ cursor: Number(s.saldo_c) > 0 ? 'pointer' : undefined, background: s.comprobante_id === selFac ? '#1e3a5f' : undefined }}><td style={S.td}>{nv(s)}</td><td style={S.td}>{fecha(s.fecha_emision)}<div style={S.sub} title={detalleVencimiento(s)}>vence {fecha(vencimientoDe(s))}</div></td>
               <td style={S.num}>{pesos(s.total_c)}{Number(s.nc_c) > 0 && <div style={S.sub}>NC {pesos(s.nc_c)}</div>}</td>
-              <td style={S.num}>{Number(s.saldo_c) <= 0 ? <span style={{ color: '#4ade80' }}>{Number(s.nc_c) >= Number(s.total_c) ? 'anulada' : 'pagada'}</span> : <b>{pesos(s.saldo_c)}</b>}</td></tr>)}
+              <td style={S.num}>{Number(s.saldo_c) <= 0 ? <span style={{ color: '#4ade80' }}>{Number(s.nc_c) >= Number(s.total_c) ? 'anulada' : 'pagada'}</span> : <b>{pesos(s.saldo_c)}</b>}
+                {(() => {
+                  const i = interesDe(s.comprobante_id)
+                  return i && i.interes_c > 0 ? <div style={{ ...S.sub, color: i.noCobrar ? '#64748b' : AMBAR, textDecoration: i.noCobrar ? 'line-through' : undefined }}
+                    title={i.noCobrar ? `No se cobra: ${i.noCobrar.motivo}` : `${i.dias_mora} días de mora${i.cerradaEl ? `, cerrados el ${fecha(i.cerradaEl)}` : ' a hoy'}`}>interés {pesos(i.interes_c)}</div> : null
+                })()}</td></tr>)}
             {d.si.map(s => <tr key={s.id}><td style={S.td}>Saldo inicial</td><td style={S.td}>{fecha(s.fecha)}</td><td style={S.num}>{pesos(s.importe_c)}</td><td style={S.td}><a href="#" style={{ color: '#93c5fd' }} onClick={e => { e.preventDefault(); correr(() => abrirDocumento(s.documento_id)) }}>respaldo</a></td></tr>)}
           </tbody></table>
 

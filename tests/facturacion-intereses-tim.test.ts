@@ -76,19 +76,21 @@ describe('interés por mora de una factura (inicio = día siguiente al vencimien
 
 describe('sólo lectura', () => {
   const leer = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')
-  it('la ruta de la TIM sólo lee del BCRA y exige Gerencia o Administración', () => {
-    const src = leer('app/api/facturacion/tim/route.ts')
+  it('la ruta de las series del BCRA sólo lee, exige Gerencia o Administración y sólo pide BADLAR o TIM', () => {
+    const src = leer('app/api/facturacion/serie-bcra/route.ts')
     expect(src).toMatch(/facturacion_puede_actual/)
-    expect(src).toMatch(/urlSerieBcra\(TIM_VARIABLE/)
+    expect(src).toMatch(/esSerieBcra\(serie\)/)
+    expect(src).toMatch(/urlSerieBcra\(variable/)
     expect(src).not.toMatch(/\.(insert|update|upsert|delete)\(|export async function (POST|PUT|PATCH|DELETE)/)
     expect(src.match(/\.rpc\('/g)).toHaveLength(1)
   })
-  it('la pantalla de intereses no registra intereses ni pide notas de débito', () => {
+  it('la pantalla de intereses no registra intereses ni pide notas de débito (sólo guarda la tasa general)', () => {
     const src = leer('components/facturacion/InteresesMora.tsx')
-    // Ninguna llamada que escriba: ni RPC, ni intereses/notas de la base, ni emisión, ni escrituras directas.
-    expect(src).not.toMatch(/\brpc\(|['"`]fact_interes_|['"`]fact_nota_|['"`]emitir|\.(insert|update|upsert|delete)\(/)
-    expect(src).not.toMatch(/import \{[^}]*\brpc\b/)
-    expect(src).toMatch(/sólo cálculo/i)
+    // Ninguna escritura salvo la tasa general: ni intereses/notas de la base, ni emisión, ni escrituras directas.
+    expect(Array.from(src.matchAll(/\brpc\('([a-z_]+)'/g), m => m[1])).toEqual(['fact_intereses_config_guardar'])
+    expect(src).not.toMatch(/['"`]fact_interes_(calcular|registrar)|['"`]fact_nota_|['"`]emitir|\.(insert|update|upsert|delete)\(/)
+    expect(src).toMatch(/informativos/)
+    expect(src).toMatch(/avisarle al cliente/)
     expect(leer('components/facturacion/Cobranzas.tsx')).toMatch(/<InteresesMora \/>/)
   })
 })
