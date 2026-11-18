@@ -576,4 +576,55 @@ describe('jornadas efectivamente trabajadas (Paniagua: baja 03/10, trabajó hast
     // Las horas que el mensual no pagó en el 001 van a extras (212): 62 − 40 = 22 h, no 62 − 48 = 14.
     expect(ctx.datos!.ordinarios!.horasExtra).toBe(22)
   })
+
+  it('baja desde guardias con ficha incompleta: CUIL y COD_INTERNO salen del padrón; la fecha de ingreso, del legajo (caso Coronel Ramón 18/11)', async () => {
+    // La ficha (usuarios) no tiene CUIL ni legajo Visual; el padrón de liquidación sí
+    // (20318468789 / 004 Bis) y la fecha de ingreso está cargada en el legajo, no en la
+    // baja (registrada desde guardias). La final no debe quedar bloqueada por eso.
+    const ram = { id: 'u-ram', nombre: 'RAMON', apellido: 'CORONEL', rol: 'guardia', puesto_organizacional: 'vigilador', estado: 'inactivo', es_prueba: false, cuil: null, legajo: 'CORONEL RAMON', legajo_visual: null, cuenta_bancaria: null }
+    const tablas: Record<string, any[]> = {
+      ...base, usuarios: [ram], turnos: [], registros_asistencia: [], novedades_laborales: [], legajo_vacaciones_tomadas: [],
+      legajo_datos_personales: [{ empleado_id: 'u-ram', fecha_ingreso: '2026-10-16' }],
+      liquidacion_persona: [{ usuario_id: 'u-ram', cuil: '20318468789', cod_interno: '004 Bis', nombre: 'CORONEL RAMON' }],
+      liquidacion_periodo: [], liquidacion_ajuste: [], liquidacion_resultado_fila: [],
+      baja_causa: [{ codigo: 'despido_sin_causa', nombre: 'Despido sin causa', presentismo: 'cero_si_no_completa_mes', evaluar: [] }],
+      liquidacion_concepto_catalogo: Array.from(CATALOGO.entries()).map(([codigo_visual, c]) => ({ codigo_visual, ...c })),
+    }
+    const q = (rows: any[]) => {
+      const o: any = {
+        select: () => o, order: () => o, eq: () => o, lte: () => o, gte: () => o, lt: () => o, gt: () => o, in: () => o, not: () => o, neq: () => o, is: () => o, limit: () => o,
+        range: (d: number, h: number) => Promise.resolve({ data: rows.slice(d, h + 1), error: null }),
+        maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
+        then: (ok: any) => ok({ data: rows, error: null }),
+      }
+      return o
+    }
+    const client = {
+      from: (t: string) => q(tablas[t] ?? []),
+      rpc: (fn: string) => Promise.resolve({ data: fn === 'liquidacion_final_ya_liquidado' ? [] : 0, error: null }),
+    }
+    const f: any = {
+      id: 'f1', baja_id: 'b1', mes: '2026-11', estado: 'pendiente_calculo', version: 0, requiere_recalculo: true,
+      entradas: {}, calculo: null, faltantes: [], advertencias: [],
+      baja: { id: 'b1', empleado_id: 'u-ram', nombre: 'CORONEL, RAMON', cuil: null, fecha_ingreso: null, causa: 'despido_sin_causa',
+        fecha_baja: '2026-11-12', estado: 'confirmada', origen: 'guardias', vacaciones: null, turnos_futuros: [] },
+    }
+    const ctx = await contextoDeFinal(client, f)
+    expect(ctx.error).toBeNull()
+    // CUIL y COD_INTERNO resueltos desde el padrón; ingreso desde el legajo.
+    expect(ctx.datos!.persona.cuil).toBe('20318468789')
+    expect(ctx.datos!.persona.legajoVisual).toBe('004 Bis')
+    expect(ctx.datos!.baja.fechaIngreso).toBe('2026-10-16')
+    const r = calcularLiquidacionFinal(ctx.datos!)
+    // Ya no faltan: ni CUIL, ni legajo, ni fecha de ingreso, ni las vacaciones.
+    expect(r.faltantes.map(x => x.clave)).not.toContain('cuil')
+    expect(r.faltantes.map(x => x.clave)).not.toContain('legajo_visual')
+    expect(r.faltantes.map(x => x.clave)).not.toContain('fecha_ingreso')
+    expect(r.faltantes.map(x => x.clave)).not.toContain('vacaciones_saldo')
+    expect(r.faltantes.map(x => x.clave)).not.toContain('vacaciones_tomadas')
+    // Vacaciones sobre el total de la antigüedad (16/10→12/11 = 27 días): ceil(27/365×14)=2, tomadas 0.
+    expect(r.calculo.vacaciones.saldo).toBe(2)
+    expect(r.calculo.vacaciones.tomadas).toBe(0)
+    expect(r.lineas.find(l => l.codigo === '208')!.cantidad).toBe(2)
+  })
 })
