@@ -11,6 +11,8 @@ import EstadoNotificaciones from '@/components/push/EstadoNotificaciones'
 import AvisoEvaluacion from '@/components/desempeno/AvisoEvaluacion'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 import AvisoDocumentacion from '@/components/documentacion/AvisoDocumentacion'
+import CompletarLegajo from '@/components/guardia/CompletarLegajo'
+import { cargarPendiente, type PendienteLegajo } from '@/lib/completar-legajo'
 import PedidoCredencial from '@/components/guardia/PedidoCredencial'
 import AvisoTramite from '@/components/guardia/AvisoTramite'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
@@ -669,11 +671,36 @@ export default function GuardiaMobile({ user }: { user: any }) {
     passTimerRef.current = window.setTimeout(() => setPassPausado(false), 15 * 60 * 1000)
   }, [])
   useEffect(() => () => { if (passTimerRef.current) window.clearTimeout(passTimerRef.current) }, [])
+  // "Completá tu legajo" (datos + DNI + credencial). Lo decide la base
+  // (mi_legajo_pendiente); si la consulta falla, no se pide. "Más tarde" lo
+  // cierra por esta sesión (máx. 3 veces, lo cuenta la base). Igual que la
+  // contraseña: nunca durante un fichaje y "Primero tengo que fichar" lo aparta.
+  const [legajoPendiente, setLegajoPendiente] = useState<PendienteLegajo | null>(null)
+  const [legajoPausado, setLegajoPausado] = useState(false)
+  useEffect(() => {
+    let vivo = true
+    let pospuesto = false
+    try { pospuesto = sessionStorage.getItem('completar_legajo_pospuesto') === '1' } catch { /* sin almacenamiento */ }
+    if (pospuesto) return
+    void cargarPendiente().then(p => { if (vivo && p.pedir) setLegajoPendiente(p) })
+    return () => { vivo = false }
+  }, [])
+  const cerrarCompletarLegajo = useCallback(() => {
+    try { sessionStorage.setItem('completar_legajo_pospuesto', '1') } catch { /* nada */ }
+    setLegajoPendiente(null)
+  }, [])
+  const legajoTimerRef = useRef<number | null>(null)
+  const pausarLegajoParaFichar = useCallback(() => {
+    setLegajoPausado(true)
+    if (legajoTimerRef.current) window.clearTimeout(legajoTimerRef.current)
+    legajoTimerRef.current = window.setTimeout(() => setLegajoPausado(false), 15 * 60 * 1000)
+  }, [])
+  useEffect(() => () => { if (legajoTimerRef.current) window.clearTimeout(legajoTimerRef.current) }, [])
   const fichajeEnCursoRef = useRef(false)
   useEffect(() => {
     const enCurso = ingresoFase !== 'idle' || fichando !== null
     // Terminó el fichaje que estaba haciendo: el aviso vuelve.
-    if (fichajeEnCursoRef.current && !enCurso) setPassPausado(false)
+    if (fichajeEnCursoRef.current && !enCurso) { setPassPausado(false); setLegajoPausado(false) }
     fichajeEnCursoRef.current = enCurso
   }, [ingresoFase, fichando])
   const [telInput, setTelInput] = useState('')
@@ -2464,7 +2491,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
           onConfirmar={() => protocolos.confirmar(protocolos.abierto!.doc, protocolos.abierto!.turnoId)}
         />
       )}
-      {protocolos.aviso && !protocolos.abierto && !telModalAbierto && !passModalAbierto && ingresoFase === 'idle' && fichando === null && !resumenTurnoId && (
+      {protocolos.aviso && !protocolos.abierto && !telModalAbierto && !passModalAbierto && (!legajoPendiente || legajoPausado) && ingresoFase === 'idle' && fichando === null && !resumenTurnoId && (
         <AvisoProtocoloIngreso
           doc={protocolos.aviso.doc}
           onLeer={() => { void protocolos.abrir(protocolos.aviso!.doc, protocolos.aviso!.turnoId) }}
@@ -2475,7 +2502,12 @@ export default function GuardiaMobile({ user }: { user: any }) {
       {/* Pedido único de la credencial (frente y dorso, «en trámite» o «no tengo»).
           Nunca durante un fichaje y siempre después del teléfono; si el pedido está
           cerrado o falla, no se muestra. */}
-      {!telModalAbierto && !passModalAbierto && ingresoFase === 'idle' && fichando === null && user?.id && <PedidoCredencial empleadoId={user.id} />}
+      {!telModalAbierto && !passModalAbierto && !legajoPendiente && ingresoFase === 'idle' && fichando === null && user?.id && <PedidoCredencial empleadoId={user.id} />}
+
+      {/* "Completá tu legajo": después del teléfono y la contraseña; nunca durante un fichaje. */}
+      {legajoPendiente && !legajoPausado && !telModalAbierto && !passModalAbierto && ingresoFase === 'idle' && fichando === null && user?.id && (
+        <CompletarLegajo empleadoId={user.id} inicial={legajoPendiente} onCerrar={cerrarCompletarLegajo} onPrimeroFichar={pausarLegajoParaFichar} />
+      )}
 
       {/* Captura de teléfono del vigilador (avisos por WhatsApp). COMPUERTA dura
           y obligatoria: sin "Ahora no", sin snooze, sin cerrar ni saltear. La
