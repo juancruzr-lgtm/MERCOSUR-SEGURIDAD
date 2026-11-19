@@ -13966,6 +13966,8 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
       setFiltros(prev => ({ ...prev, legajo_historico: { empleado: q.get('empleado') || null, ver: q.get('ver') || null, tipo: q.get('tipo') || null } }))
       return
     }
+    // Desde avisos de WhatsApp: abrir una sección (los permisos se controlan al dibujarla).
+    if (destino === 'objetivos' || destino === 'protocolos' || destino === 'rondas') { setPage(destino); return }
     if (destino !== 'revision_planillas') return
     setPage(destino)
     setFiltros(prev => ({
