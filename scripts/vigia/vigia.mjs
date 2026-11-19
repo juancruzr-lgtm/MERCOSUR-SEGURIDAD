@@ -54,7 +54,7 @@ if (PRUEBA) { REGLAS.abrir.rojo = 1; REGLAS.cerrar.rojo = 1 }
 
 const ahoraAR = (d = new Date()) => new Intl.DateTimeFormat('es-AR', {
   timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit',
-  hour: '2-digit', minute: '2-digit', hour12: false,
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
 }).format(d)
 const dormir = ms => new Promise(r => setTimeout(r, ms))
 
