@@ -1,0 +1,80 @@
+# Vigía externo de Mercosur Seguridad (incidente 18/11/2026).
+# Corre en GitHub, afuera de Supabase y de Vercel: si la base o la app se caen,
+# esto sigue funcionando y abre un incidente (issue con etiqueta "vigia") que
+# GitHub notifica por email y app del celular. Ver docs/monitoreo/VIGIA.md.
+#
+# GitHub agenda cada 5 min (mínimo permitido) y cada corrida hace 5 chequeos
+# separados ~60 s → un chequeo por minuto. El repo es público: los minutos de
+# Actions son gratis. Si el repo pasa a privado, bajar ITERACIONES (ver doc).
+name: Vigía Mercosur
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: 'normal | prueba (prueba: 1 chequeo, issues marcados PRUEBA y sin asignar)'
+        default: 'prueba'
+        type: choice
+        options: [prueba, normal]
+      simular:
+        description: 'Sólo en prueba: ninguno | caida_app | recuperacion'
+        default: 'ninguno'
+        type: choice
+        options: [ninguno, caida_app, recuperacion]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: vigia
+  cancel-in-progress: false
+
+jobs:
+  vigia:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/vigia
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Recuperar estado anterior
+        if: ${{ github.event_name == 'schedule' || inputs.modo == 'normal' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: .vigia
+          key: vigia-estado-${{ github.run_id }}
+          restore-keys: vigia-estado-
+
+      - name: Chequear
+        env:
+          APP_URL: https://mercosur-seguridad.vercel.app
+          SUPABASE_URL: https://rngdjslzfcjtepgzmzrs.supabase.co
+          # Clave publishable de Supabase: pública por diseño (es la misma que
+          # usa el navegador). Sólo puede llamar salud_ping y auth/v1/health.
+          SUPABASE_ANON_KEY: ${{ secrets.VIGIA_SUPABASE_ANON_KEY || 'sb_publishable_2gE2JZXgImEmxnN_ImS61g_vHwyxckI' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASIGNAR: ${{ vars.VIGIA_ASIGNAR || 'juancruzr-lgtm' }}
+          MODO: ${{ github.event_name == 'schedule' && 'normal' || inputs.modo }}
+          SIMULAR: ${{ github.event_name == 'schedule' && 'ninguno' || inputs.simular }}
+          # WhatsApp opcional: queda inactivo hasta cargar estos secretos (ver doc).
+          WHATSAPP_TOKEN: ${{ secrets.VIGIA_WHATSAPP_TOKEN }}
+          WHATSAPP_PHONE_ID: ${{ secrets.VIGIA_WHATSAPP_PHONE_ID }}
+          ALERTA_TELEFONOS: ${{ secrets.VIGIA_ALERTA_TELEFONOS }}
+          ALERTA_PLANTILLA: ${{ vars.VIGIA_ALERTA_PLANTILLA }}
+        run: node scripts/vigia/vigia.mjs
+
+      - name: Guardar estado
+        if: ${{ always() && (github.event_name == 'schedule' || inputs.modo == 'normal') }}
+        uses: actions/cache/save@v4
+        with:
+          path: .vigia
+          key: vigia-estado-${{ github.run_id }}-${{ github.run_attempt }}
