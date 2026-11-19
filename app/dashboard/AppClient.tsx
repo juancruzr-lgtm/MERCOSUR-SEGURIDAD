@@ -90,7 +90,7 @@ import LiquidacionPanel from '@/components/liquidacion/LiquidacionPanel'
 import FacturacionPanel from '@/components/facturacion/FacturacionPanel'
 import DesempenoPanel from '@/components/desempeno/DesempenoPanel'
 import TableroGerencia from '@/components/gerencia/TableroGerencia'
-import { gestionAdministracionVisible, tableroGerenciaVisible } from '@/lib/tablero-gerencia/acceso'
+import { configuracionGuiadaVisible, gestionAdministracionVisible, tableroGerenciaVisible } from '@/lib/tablero-gerencia/acceso'
 import ResumenEvaluacionPanel from '@/components/gerencia/ResumenEvaluacionPanel'
 import { cargarFilasBandeja } from '@/lib/bandeja-datos'
 import { desempenoPorEmpleado, mesPorDefecto, etiquetaMes } from '@/lib/desempeno-datos'
@@ -174,6 +174,7 @@ const AsistenciaMap = dynamic(() => import('@/components/asistencia/AsistenciaMa
 
 // Tablero de Gerencia: oculto salvo NEXT_PUBLIC_TABLERO_GERENCIA=1 (vista previa, sin envíos).
 const TableroGerenciaPanel = dynamic(() => import('@/components/tablero-gerencia/TableroGerenciaInicio'), { ssr: false })
+const ConfiguracionGuiadaPanel = dynamic(() => import('@/components/configuracion-guiada/ConfiguracionGuiadaPanel'), { ssr: false })
 const TableroAdministracionPanel = dynamic(() => import('@/components/gestion-admin/TableroAdministracionPanel'), { ssr: false })
 const PaginaGps = dynamic(() => import('@/components/gps/PaginaGps'), {
   ssr: false,
@@ -13967,7 +13968,7 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
       return
     }
     // Desde avisos de WhatsApp: abrir una sección (los permisos se controlan al dibujarla).
-    if (destino === 'objetivos' || destino === 'protocolos' || destino === 'rondas') { setPage(destino); return }
+    if (destino === 'objetivos' || destino === 'protocolos' || destino === 'rondas' || destino === 'configuracion_guiada') { setPage(destino); return }
     if (destino !== 'revision_planillas') return
     setPage(destino)
     setFiltros(prev => ({
@@ -14297,6 +14298,7 @@ const esGuardia = esRolGuardia(user.rol)
       // lecturas, diferencias). Administración/Gerencia y jefatura operativa;
       // el supervisor lo ve en la ficha de cada objetivo de su zona.
       ...(tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas') ? [{ id:'protocolos', icon:'📋', label:'Protocolos' }] : []),
+      ...(configuracionGuiadaVisible() && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas')) ? [{ id:'configuracion_guiada', icon:'🧩', label:'Configurar objetivos' }] : []),
       // Legajo Digital (una sola entrada): datos personales, documentación
       // (revisar, situación, vencimientos, auditoría) y archivo histórico.
       // Sólo puesto Administración o Gerencia (sin overrides). No Supervisión.
@@ -14450,6 +14452,7 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'afip_empleados' && gestionaDatosSensibles(user) && <LegajoDigital inicial="datos" user={user} />}
               {page === 'estatuto_interno' && tieneCapacidad(user, 'gestionar_personal') && <ControlEstatuto user={user} />}
               {page === 'protocolos' && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas')) && <ControlProtocolos />}
+              {page === 'configuracion_guiada' && configuracionGuiadaVisible() && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas')) && <ConfiguracionGuiadaPanel objetivos={objetivos} onIrARondas={() => setPage('rondas')} />}
               {page === 'legajo_digital' && gestionaDatosSensibles(user) && <LegajoDigital user={user} />}
               {page === 'gestion_administracion' && gestionAdministracionVisible() && gestionaDatosSensibles(user) && <TableroAdministracionPanel />}
               {/* Accesos anteriores (enlaces guardados): abren la misma pantalla en su sección. */}
