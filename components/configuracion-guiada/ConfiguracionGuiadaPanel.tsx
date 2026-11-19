@@ -158,7 +158,7 @@ export default function ConfiguracionGuiadaPanel({ objetivos, puedeAprobar, nomb
                 <div style={{ flex: '1 1 260px' }}>
                   <div style={{ fontWeight: 600 }}>{nombre(g.objetivo_id)} <span style={{ fontSize: 12, color: g.estado === 'activa' ? C.verde : C.ambar }}>· {ETIQUETA_ESTADO_RONDA_GUIADA[g.estado]}</span></div>
                   {g.estado === 'activa' ? (
-                    <div style={sub}>Configuró {nombrePersona(g.capturada_por)} · {g.activada_at ? new Date(g.activada_at).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }) : ''} · {g.distancia_metros} m entre puntos · {textoFrecuencia(g.frecuencia_minutos ?? 120)}
+                    <div style={sub}>Configuró {nombrePersona(g.capturada_por)} · {g.activada_at ? new Date(g.activada_at).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(',', '') : ''} · {g.distancia_metros} m entre puntos · {textoFrecuencia(g.frecuencia_minutos ?? 120)}
                       {g.p1_lat != null && g.p2_lat != null && <> · <a style={{ color: '#60a5fa' }} target="_blank" rel="noreferrer" href={`https://www.google.com/maps/dir/${g.p1_lat},${g.p1_lng}/${g.p2_lat},${g.p2_lng}`}>ver en el mapa</a></>}</div>
                   ) : (
                     <div style={sub}>{nombrePersona(g.capturada_por)} no pudo crearla: {MOTIVOS_PROBLEMA[g.motivo_revision ?? 'otro']}{g.detalle_revision ? ` (${g.detalle_revision})` : ''}. No se activó ninguna ronda.</div>
