@@ -100,7 +100,8 @@ export default function CompletarLegajo({ empleadoId, inicial, onCerrar, onPrime
   }, [frente, dorso])
 
   const faltan = p.faltan ?? []
-  const propuesta = propuestaDesdeDni(lectura, faltan)
+  // La IA propone lo obligatorio que falta y también los opcionales vacíos (nacimiento, nacionalidad).
+  const propuesta = propuestaDesdeDni(lectura, [...faltan, ...(p.vacios ?? [])])
   const camposPropuestos = Object.keys(propuesta) as CampoDniLegajo[]
   const datosListos = faltan.length === 0 && (p.por_confirmar ?? 0) === 0 && !!p.validado
   const todoListo = !p.pedir
@@ -195,9 +196,12 @@ export default function CompletarLegajo({ empleadoId, inicial, onCerrar, onPrime
             <Paso n={2} titulo="Tus datos" listo={datosListos}>
               {faltan.length > 0 && (
                 <div style={{ fontSize: 13.5, color: '#fbbf24', marginBottom: 10, lineHeight: 1.45 }}>
-                  Faltan: {faltan.map(c => ETIQUETA_CAMPO[c] ?? c).join(', ')}.
+                  Falta tu domicilio: {faltan.map(c => ETIQUETA_CAMPO[c] ?? c).join(', ')}.
                 </div>
               )}
+              <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 10, lineHeight: 1.45 }}>
+                Sólo el domicilio es obligatorio. Lo demás (obra social, contacto de emergencia, nacimiento) cargalo si lo tenés.
+              </div>
               {(p.por_confirmar ?? 0) > 0 && (
                 <div style={{ fontSize: 13.5, color: '#93c5fd', marginBottom: 10 }}>Tenés {p.por_confirmar} dato(s) de una planilla vieja para confirmar o corregir.</div>
               )}
