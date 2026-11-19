@@ -20,6 +20,11 @@ export const maxDuration = 15
 const URL_SB = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
 const ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
 const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
+// Las claves nuevas (sb_secret_…) van sólo en "apikey"; las viejas (JWT) también como Bearer.
+const esJwt = (k: string) => k.startsWith('eyJ')
+const cabeceras = (k: string): Record<string, string> => ({ apikey: k, ...(esJwt(k) ? { Authorization: `Bearer ${k}` } : {}) })
+// Sólo el TIPO de clave (nunca su valor), para diagnosticar desde afuera.
+const TIPO_CLAVE = !SERVICE ? 'falta' : esJwt(SERVICE) ? 'jwt' : SERVICE.startsWith('sb_secret_') ? 'secret' : 'otra'
 
 async function medir(url: string, init: RequestInit, timeoutMs: number): Promise<Medicion & { cuerpo?: string }> {
   const ctrl = new AbortController()
@@ -41,10 +46,10 @@ export async function GET() {
   const [base, auth, metricas] = await Promise.all([
     medir(`${URL_SB}/rest/v1/rpc/monitor_salud`, {
       method: 'POST',
-      headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, 'Content-Type': 'application/json' },
+      headers: { ...cabeceras(SERVICE), 'Content-Type': 'application/json' },
       body: '{}',
     }, 4000),
-    medir(`${URL_SB}/auth/v1/health`, { headers: { apikey: ANON } }, 3000),
+    medir(`${URL_SB}/auth/v1/health`, { headers: cabeceras(ANON) }, 3000),
     medir(`${URL_SB}/customer/v1/privileged/metrics`, {
       headers: { Authorization: `Basic ${Buffer.from(`service_role:${SERVICE}`).toString('base64')}` },
     }, 4000),
@@ -63,7 +68,7 @@ export async function GET() {
   })
 
   return NextResponse.json(
-    { ...resultado, ms_total: Date.now() - t0, ts: new Date().toISOString() },
+    { ...resultado, clave_servicio: TIPO_CLAVE, ms_total: Date.now() - t0, ts: new Date().toISOString() },
     {
       status: resultado.estado === 'caido' ? 503 : 200,
       headers: { 'Cache-Control': 'no-store, max-age=0' },
