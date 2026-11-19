@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { evaluarSalud, extraerMetricas, UMBRALES } from '@/lib/salud'
-import { problemasDe, calcularTasas } from '../scripts/vigia/vigia.mjs'
+import { problemasDe, calcularTasas, minutosSobreBase } from '../scripts/vigia/vigia.mjs'
 
 const ok = { ok: true, status: 200, ms: 50 }
 const baseSana = {
@@ -143,9 +143,23 @@ describe('vigía (GitHub Actions)', () => {
     const prev = { ts: 0, cpu_total_seg: 1000, cpu_ocioso_seg: 900, disco_io_seg: 100, disco_leido_bytes: 0 }
     const rec = { cpu_total_seg: 1060, cpu_ocioso_seg: 906, disco_io_seg: 157, disco_leido_bytes: 60 * 1048576 * 10 }
     const t = calcularTasas(prev, rec, 60000)
-    expect(t).toEqual({ cpuPct: 90, discoOcupadoPct: 95, lecturaMBs: 10 })
+    expect(t).toMatchObject({ cpuPct: 90, discoOcupadoPct: 95, lecturaMBs: 10 })
     const p = problemasDe({ ...base, tasas: t })
     expect(p.map((x: any) => `${x.clave}:${x.nivel}`).sort()).toEqual(['cpu:rojo', 'disco_io:rojo'])
+  })
+  it('Disk IO Budget estimado: MB/s e IOPS sobre el límite base de MICRO (87 MB/s, 500 IOPS)', () => {
+    const prev = { ts: 0, disco_leido_bytes: 0, disco_escrito_bytes: 0, disco_ops: 0 }
+    const alto = calcularTasas(prev, { disco_leido_bytes: 60 * 1048576 * 80, disco_escrito_bytes: 60 * 1048576 * 20, disco_ops: 60 * 300 }, 60000)
+    expect(alto).toMatchObject({ lecturaMBs: 80, escrituraMBs: 20, totalMBs: 100, iops: 300 })
+    expect(minutosSobreBase(0, alto)).toBe(1)
+    expect(minutosSobreBase(14, alto)).toBe(15)
+    const iopsAltas = calcularTasas(prev, { disco_leido_bytes: 0, disco_escrito_bytes: 0, disco_ops: 60 * 900 }, 60000)
+    expect(minutosSobreBase(3, iopsAltas)).toBe(4)
+    const normal = calcularTasas(prev, { disco_leido_bytes: 60 * 1048576 * 2, disco_escrito_bytes: 0, disco_ops: 60 * 40 }, 60000)
+    expect(minutosSobreBase(9, normal)).toBe(0)
+    expect(minutosSobreBase(7, null)).toBe(7)   // sin dato: no se reinicia ni suma
+    expect(problemasDe({ ...base, tasas: { ...alto, minSobreBase: 3 } })[0]).toMatchObject({ clave: 'disk_io_budget', nivel: 'amarillo' })
+    expect(problemasDe({ ...base, tasas: { ...alto, minSobreBase: 15 } })[0]).toMatchObject({ clave: 'disk_io_budget', nivel: 'rojo' })
   })
   it('tasas: sin muestra previa o muestras muy separadas → null', () => {
     expect(calcularTasas(null, {}, 1)).toBeNull()
