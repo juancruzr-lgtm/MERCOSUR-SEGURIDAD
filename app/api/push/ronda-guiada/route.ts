@@ -1,19 +1,24 @@
-// Ronda guiada: (1) avisa a supervisores de la zona y jefes cuando un vigilador
-// deja una ronda PROPUESTA y (2) activa las que cumplieron 24 h sin cambios.
+// Avisos de la ronda guiada.
+//  - Ronda ACTIVA recién configurada → Gerencia, Director técnico, Jefe de
+//    supervisores (ronda_guiada_config.avisar_usuarios) y el supervisor de la
+//    zona: push + WhatsApp (plantilla `ronda_configurada_activa`, aprobada).
+//  - Configuración que NO se pudo validar (requiere revisión) → los mismos,
+//    por push (no hay plantilla de WhatsApp para esto).
+// Un aviso por ronda y persona: push con reclamo atómico en
+// notificaciones_enviadas; WhatsApp con reclamar_envio_whatsapp.
 //
 // ── APAGADO ─────────────────────────────────────────────────────────────────
-// HABILITADO = false en código: sin aprobación no se activa ninguna ronda ni
-// sale ningún WhatsApp. Requiere la migración 20261218120000, la plantilla
-// `ronda_guiada_propuesta` aprobada en Meta, la migración 20261217120000
-// (envíos sin turno) y programar el cron (no hay cron creado).
-// Sin `?enviar=1` corre en seco: devuelve qué activaría y a quién avisaría.
+// HABILITADO = false en código. Requiere las migraciones 20261217120000 y
+// 20261218120000 y programar el cron (no hay cron creado). Sin `?enviar=1`
+// corre en seco y devuelve a quién y qué se mandaría.
 
 import { NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '../../_lib/employee-auth'
+import { enviarAvisoClaimFirst } from '../../_lib/push-notificaciones'
 import { normalizarTelefonoAr } from '@/lib/telefono-ar'
 import { proveedorPorDefecto } from '@/lib/whatsapp'
 import { claveEnvioWhatsApp, completarEnvio, crearPresupuestoCorrida, reclamarEnvio } from '@/lib/whatsapp-envio-seguro'
-import { PLANTILLA_RONDA_GUIADA_PROPUESTA, variablesRondaPropuesta, vistaPreviaRondaPropuesta } from '@/lib/configuracion-guiada'
+import { MOTIVOS_PROBLEMA, PLANTILLA_RONDA_CONFIGURADA, textoFrecuencia, variablesRondaConfigurada, vistaPrevia, type MotivoProblema } from '@/lib/configuracion-guiada'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -21,11 +26,12 @@ export const fetchCache = 'force-no-store'
 export const maxDuration = 60
 
 const HABILITADO = false as const
-const ETAPA = 'wa_ronda_guiada_propuesta'
-const PLANTILLA = process.env.WHATSAPP_PLANTILLA_RONDA_GUIADA || PLANTILLA_RONDA_GUIADA_PROPUESTA.nombre
-const PUESTOS_JEFES = (process.env.WHATSAPP_OBJETIVO_SIN_CONFIG_PUESTOS || 'jefe_supervisores,direccion_operativa').split(',').map(s => s.trim()).filter(Boolean)
+const ETAPA = 'wa_ronda_configurada_activa'
+const PLANTILLA = process.env.WHATSAPP_PLANTILLA_RONDA_CONFIGURADA || PLANTILLA_RONDA_CONFIGURADA.nombre
+const URL_APP = process.env.WHATSAPP_DEEPLINK_BASE || 'https://mercosur-seguridad.vercel.app/dashboard'
 
 interface Persona { id: string; nombre: string | null; apellido: string | null; telefono: string | null }
+interface Guiada { id: string; objetivo_id: string; estado: string; distancia_metros: number | null; frecuencia_minutos: number | null; activada_at: string | null; capturada_por: string | null; motivo_revision: string | null; revision_at: string | null }
 
 export async function GET(req: Request) {
   const url = new URL(req.url)
@@ -48,56 +54,75 @@ export async function GET(req: Request) {
   }
   const deVerdad = pideEnvio && esCron && HABILITADO
 
-  const g = await client.from('ronda_guiada').select('id, objetivo_id, distancia_metros, activa_desde').eq('estado', 'propuesta')
-  if (g.error) return NextResponse.json({ error: `ronda_guiada: ${g.error.message} (¿migración 20261218120000 aplicada?)` }, { status: 502 })
-  const propuestas = (g.data ?? []) as { id: string; objetivo_id: string; distancia_metros: number | null; activa_desde: string }[]
-  const objIds = Array.from(new Set(propuestas.map(x => x.objetivo_id)))
+  const [cfg, gs] = await Promise.all([
+    client.from('ronda_guiada_config').select('avisar_usuarios').maybeSingle(),
+    client.from('ronda_guiada').select('id, objetivo_id, estado, distancia_metros, frecuencia_minutos, activada_at, capturada_por, motivo_revision, revision_at')
+      .is('avisado_at', null).in('estado', ['activa', 'requiere_revision']),
+  ])
+  if (cfg.error || gs.error) return NextResponse.json({ error: `¿Migración 20261218120000 aplicada? ${cfg.error?.message ?? gs.error?.message}` }, { status: 502 })
+  const fijos: string[] = cfg.data?.avisar_usuarios ?? []
+  const guiadas = (gs.data ?? []) as Guiada[]
+  if (guiadas.length === 0) return NextResponse.json({ modo: deVerdad ? 'REAL' : 'SIMULACION', pendientes: 0 })
 
-  const obj = objIds.length ? await client.from('objetivos').select('id, nombre, zona_id').in('id', objIds) : { data: [], error: null }
-  const jefes = await client.from('usuarios').select('id, nombre, apellido, telefono').eq('estado', 'activo').in('puesto_organizacional', PUESTOS_JEFES)
-  const supZona = await client.from('supervisor_zonas').select('supervisor_id, zona_id')
-  if (obj.error || jefes.error || supZona.error) return NextResponse.json({ error: 'Fuente con error: no se evalúa' }, { status: 502 })
-  const zonas = (supZona.data ?? []) as { supervisor_id: string; zona_id: string }[]
-  const supIds = Array.from(new Set(zonas.map(z => z.supervisor_id)))
-  const sups = supIds.length ? await client.from('usuarios').select('id, nombre, apellido, telefono').eq('estado', 'activo').in('id', supIds) : { data: [], error: null }
-  const persona = new Map<string, Persona>()
-  for (const u of [...((jefes.data ?? []) as Persona[]), ...((sups.data ?? []) as Persona[])]) persona.set(u.id, u)
+  const objIds = Array.from(new Set(guiadas.map(g => g.objetivo_id)))
+  const [obj, zonas] = await Promise.all([
+    client.from('objetivos').select('id, nombre, zona_id').in('id', objIds),
+    client.from('supervisor_zonas').select('supervisor_id, zona_id'),
+  ])
+  if (obj.error || zonas.error) return NextResponse.json({ error: 'Fuente con error: no se evalúa' }, { status: 502 })
+  const objetivo = new Map(((obj.data ?? []) as { id: string; nombre: string; zona_id: string | null }[]).map(o => [o.id, o]))
+  const supDeZona = (zonaId: string | null) => ((zonas.data ?? []) as { supervisor_id: string; zona_id: string }[]).filter(z => z.zona_id === zonaId).map(z => z.supervisor_id)
+
+  const ids = Array.from(new Set([...fijos, ...guiadas.flatMap(g => supDeZona(objetivo.get(g.objetivo_id)?.zona_id ?? null)), ...guiadas.map(g => g.capturada_por).filter(Boolean) as string[]]))
+  const [us, subs] = await Promise.all([
+    client.from('usuarios').select('id, nombre, apellido, telefono').in('id', ids),
+    client.from('push_subscriptions').select('id, usuario_id, endpoint, p256dh, auth').eq('activo', true).in('usuario_id', ids),
+  ])
+  const persona = new Map(((us.data ?? []) as Persona[]).map(u => [u.id, u]))
+  const nombre = (id: string | null) => { const u = id ? persona.get(id) : null; return u ? `${u.nombre ?? ''} ${u.apellido ?? ''}`.trim() : 'vigilador' }
 
   const proveedor = proveedorPorDefecto()
-  const presupuesto = crearPresupuestoCorrida({ maxEnvios: 20, maxMs: 30000 })
-  const avisos: Record<string, unknown>[] = []
+  const presupuesto = crearPresupuestoCorrida({ maxEnvios: 30, maxMs: 40000 })
+  const salida: Record<string, unknown>[] = []
 
-  for (const p of propuestas) {
-    const o = ((obj.data ?? []) as { id: string; nombre: string; zona_id: string | null }[]).find(x => x.id === p.objetivo_id)
-    const destinos = new Set<string>([
-      ...((jefes.data ?? []) as Persona[]).map(u => u.id),
-      ...zonas.filter(z => z.zona_id === o?.zona_id).map(z => z.supervisor_id),
-    ])
-    for (const id of Array.from(destinos)) {
+  for (const g of guiadas) {
+    const o = objetivo.get(g.objetivo_id)
+    const destinos = Array.from(new Set([...fijos, ...supDeZona(o?.zona_id ?? null)]))
+    const activa = g.estado === 'activa'
+    const titulo = activa ? `Ronda activa · ${o?.nombre ?? 'objetivo'}` : `Ronda sin configurar · ${o?.nombre ?? 'objetivo'}`
+    const cuerpo = activa
+      ? `${nombre(g.capturada_por)} configuró la ronda: ${Math.round(Number(g.distancia_metros ?? 0))} m entre puntos, ${textoFrecuencia(g.frecuencia_minutos ?? 120)}. RONDA ACTIVA.`
+      : `${nombre(g.capturada_por)} no pudo configurar la ronda: ${MOTIVOS_PROBLEMA[(g.motivo_revision ?? 'otro') as MotivoProblema] ?? g.motivo_revision}. Revisalo desde Configurar objetivos.`
+    let todoOk = true
+    for (const id of destinos) {
       const u = persona.get(id)
       const tel = normalizarTelefonoAr(u?.telefono)
-      if (!u || !tel.e164) { avisos.push({ objetivo: o?.nombre, para: id, omitido: 'sin_telefono' }); continue }
-      const variables = variablesRondaPropuesta(u.nombre ?? '', o?.nombre ?? 'objetivo', Number(p.distancia_metros ?? 0), p.activa_desde)
-      if (!deVerdad) { avisos.push({ objetivo: o?.nombre, para: `${u.apellido ?? ''}, ${u.nombre ?? ''}`, mensaje: vistaPreviaRondaPropuesta(variables) }); continue }
-      if (!presupuesto.disponible()) break
-      const rec = await reclamarEnvio(client, claveEnvioWhatsApp({ etapa: ETAPA, evento: `ronda_guiada:${p.id}`, destinatarioId: id }),
-        { objetivo_id: p.objetivo_id, nivel: ETAPA, destinatario_id: id, telefono: tel.e164, plantilla: PLANTILLA, proveedor: proveedor.nombre },
-        { maxIntentos: 2, backoffMin: 10, topeDestinatarioDia: 10 })
-      if (!rec.ok) continue
-      presupuesto.registrar()
-      const r = await proveedor.enviar({ telefono: tel.e164, plantilla: PLANTILLA, variables, boton: { urlSuffix: 'configuracion_guiada' } })
-      avisos.push({ objetivo: o?.nombre, para: id, ok: r.ok, error: r.error })
-      await completarEnvio(client, rec.id as string, r)
+      const variables = activa ? variablesRondaConfigurada({ destinatario: u?.nombre ?? '', objetivo: o?.nombre ?? 'objetivo', vigilador: nombre(g.capturada_por), activadaIso: g.activada_at ?? new Date().toISOString(), distancia: Number(g.distancia_metros ?? 0), frecuenciaMin: g.frecuencia_minutos ?? 120 }) : null
+      if (!deVerdad) {
+        salida.push({ objetivo: o?.nombre, para: nombre(id), push: `${titulo} — ${cuerpo}`, whatsapp: variables && tel.e164 ? vistaPrevia(PLANTILLA_RONDA_CONFIGURADA.cuerpo, variables) : (activa ? 'sin teléfono válido' : 'sólo push') })
+        continue
+      }
+      // Push (dedup atómico por ronda y persona)
+      const tipo = activa ? `ronda_guiada_activa:${g.id}` : `ronda_guiada_revision:${g.id}:${g.revision_at}`
+      const pr = await enviarAvisoClaimFirst(client, (subs.data ?? []) as any[], id, g.objetivo_id, tipo, { title: titulo, body: cuerpo, url: `${URL_APP}?page=configuracion_guiada`, tag: `ronda-guiada-${g.id}` })
+      // WhatsApp sólo para la ronda activa (plantilla aprobada)
+      let wa: string = 'no corresponde'
+      if (activa && variables && tel.e164 && presupuesto.disponible()) {
+        const rec = await reclamarEnvio(client, claveEnvioWhatsApp({ etapa: ETAPA, evento: `ronda_guiada:${g.id}`, destinatarioId: id }),
+          { objetivo_id: g.objetivo_id, nivel: ETAPA, destinatario_id: id, telefono: tel.e164, plantilla: PLANTILLA, proveedor: proveedor.nombre },
+          { maxIntentos: 2, backoffMin: 10, topeDestinatarioDia: 20 })
+        if (rec.ok) {
+          presupuesto.registrar()
+          const r = await proveedor.enviar({ telefono: tel.e164, plantilla: PLANTILLA, variables, boton: { urlSuffix: PLANTILLA_RONDA_CONFIGURADA.boton } })
+          await completarEnvio(client, rec.id as string, r)
+          wa = r.ok ? 'enviado' : `error: ${r.error}`
+          if (!r.ok) todoOk = false
+        } else wa = `no reclamado: ${rec.motivo}`
+      }
+      salida.push({ objetivo: o?.nombre, para: id, push: pr, whatsapp: wa })
     }
+    if (deVerdad && todoOk) await client.from('ronda_guiada').update({ avisado_at: new Date().toISOString() }).eq('id', g.id)
   }
 
-  let activacion: unknown
-  if (deVerdad) {
-    const a = await client.rpc('ronda_guiada_activar_vencidas')
-    activacion = a.error ? { error: a.error.message } : a.data
-  } else {
-    activacion = { simulacion: true, seActivarian: propuestas.filter(p => p.activa_desde && Date.parse(p.activa_desde) <= Date.now()).length }
-  }
-
-  return NextResponse.json({ modo: deVerdad ? 'REAL' : pideEnvio ? 'BLOQUEADO_DESHABILITADO' : 'SIMULACION', propuestas: propuestas.length, avisos, activacion })
+  return NextResponse.json({ modo: deVerdad ? 'REAL' : pideEnvio ? 'BLOQUEADO_DESHABILITADO' : 'SIMULACION', pendientes: guiadas.length, avisos: salida })
 }

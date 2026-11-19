@@ -1,40 +1,62 @@
 import { describe, expect, it } from 'vitest'
-import { armarProtocolo, distanciaMetros, faltaParaActivar, faltantesProtocolo, textoProblema, validarPunto } from '@/lib/configuracion-guiada'
+import {
+  armarProtocolo, distanciaMetros, faltantesProtocolo, PLANTILLA_RONDA_CONFIGURADA, radioPunto, separacionMinima,
+  textoFrecuencia, textoProblema, validarPunto, variablesRondaConfigurada, vistaPrevia,
+} from '@/lib/configuracion-guiada'
 
-const CENTRO = { lat: -32.9500, lng: -60.6500 }
+const OBJ = { lat: -32.95, lng: -60.65, radio_metros: 100 }
 // ~0.0009° de latitud ≈ 100 m
-const p = (dLat: number, precision = 8) => ({ lat: CENTRO.lat + dLat, lng: CENTRO.lng, precision })
+const p = (dLat: number, precision = 6) => ({ lat: OBJ.lat + dLat, lng: OBJ.lng, precision })
 
-describe('ronda guiada: dos puntos', () => {
+describe('ronda guiada: validación de puntos', () => {
   it('distancia haversine', () => {
-    expect(Math.round(distanciaMetros(CENTRO, { lat: CENTRO.lat + 0.0009, lng: CENTRO.lng }))).toBe(100)
+    expect(Math.round(distanciaMetros(OBJ, { lat: OBJ.lat + 0.0009, lng: OBJ.lng }))).toBe(100)
   })
-  it('valida precisión, cercanía al objetivo y separación entre puntos', () => {
-    expect(validarPunto(null, CENTRO)).toEqual({ tipo: 'sin_gps' })
-    expect(validarPunto(p(0, 40), CENTRO)).toEqual({ tipo: 'impreciso', precision: 40 })
-    expect(validarPunto(p(0.009), CENTRO)).toMatchObject({ tipo: 'lejos_del_objetivo' })
-    const primero = p(0)
-    expect(validarPunto(p(0.0001), CENTRO, primero)).toMatchObject({ tipo: 'muy_cerca' })
-    expect(validarPunto(p(0.0036), CENTRO, primero)).toMatchObject({ tipo: 'muy_lejos' })
-    expect(validarPunto(p(0.0009), CENTRO, primero)).toBeNull()
-    expect(validarPunto(p(0), null)).toBeNull()
+  it('precisión máxima ±30 m', () => {
+    expect(validarPunto(p(0, 30), OBJ)).toBeNull()
+    expect(validarPunto(p(0, 31), OBJ)).toEqual({ tipo: 'impreciso', precision: 31 })
+    expect(validarPunto(null, OBJ)).toEqual({ tipo: 'sin_gps' })
   })
-  it('mensajes claros para el vigilador', () => {
-    expect(textoProblema({ tipo: 'muy_cerca', distancia: 8 })).toMatch(/otro extremo/)
+  it('área del objetivo = radio + precisión + 25 m', () => {
+    expect(validarPunto(p(0.0011, 6), OBJ)).toBeNull() // ~122 m < 131 m
+    expect(validarPunto(p(0.0013, 6), OBJ)).toMatchObject({ tipo: 'fuera_del_objetivo' }) // ~144 m
+    expect(validarPunto(p(0.0013, 6), { ...OBJ, radio_metros: 300 })).toBeNull() // objetivo grande: se respeta su radio
+    expect(validarPunto(p(0.05), { lat: null, lng: null, radio_metros: null })).toBeNull() // sin coordenadas del objetivo no se controla el área
+  })
+  it('sin distancia fija: se exige superar la suma de las precisiones', () => {
+    const primero = p(0, 7)
+    expect(separacionMinima(primero, p(0, 6))).toBe(13)
+    expect(validarPunto(p(0.0001, 6), OBJ, primero)).toMatchObject({ tipo: 'indistinguible', minimo: 13 }) // 11 m
+    expect(validarPunto(p(0.000126, 6), OBJ, primero)).toBeNull() // 14 m
+    expect(validarPunto(p(0.000126, 15), OBJ, p(0, 15))).toMatchObject({ tipo: 'indistinguible' }) // con GPS peor hace falta más
+  })
+  it('mensajes para el vigilador y radio del punto', () => {
+    expect(textoProblema({ tipo: 'indistinguible', distancia: 11, minimo: 13 })).toMatch(/más de 13 m/)
+    expect(radioPunto(6)).toBe(25)
+    expect(radioPunto(20)).toBe(40)
   })
 })
 
 describe('protocolo guiado', () => {
   it('pide las obligatorias y arma el texto sólo con lo respondido', () => {
-    expect(faltantesProtocolo({ horario: '24 h' })).toContain('Qué está prohibido')
-    const r = armarProtocolo('Planta Norte', { horario: '24 h', tareas: 'Control de accesos', prohibido: 'Abandonar el puesto', emergencias: 'Llamar al 911', contactos: 'Encargado: 341…' })
-    expect(r.titulo).toBe('Protocolo del puesto — Planta Norte')
-    expect(r.texto).toMatch(/^PROTOCOLO DEL PUESTO — PLANTA NORTE/)
-    expect(r.texto).toMatch(/1\. HORARIO Y MODALIDAD DEL SERVICIO\n24 h/)
-    expect(r.texto).not.toMatch(/CONTROL DE ACCESOS\n/)
+    expect(faltantesProtocolo({ horario: '24 h' })).toContain('Restricciones y prohibiciones')
+    const r = armarProtocolo('Depósito', { horario: '24 h', accesos: 'Portón 1', obligaciones: 'Registrar camiones', prohibido: 'Abandonar el puesto', emergencias: '911', contactos: 'Encargado 341…' })
+    expect(r.texto).toMatch(/^PROTOCOLO DEL PUESTO — DEPÓSITO/)
+    expect(r.texto).toMatch(/6\. CONTACTOS Y TELÉFONOS IMPORTANTES/)
+    expect(r.texto).not.toMatch(/INSTRUCCIONES PARTICULARES/)
   })
-  it('cuenta regresiva de activación', () => {
-    expect(faltaParaActivar('2026-11-20T15:00:00Z', '2026-11-19T15:00:00Z')).toBe('se activa en 24 h')
-    expect(faltaParaActivar('2026-11-19T15:00:00Z', '2026-11-19T16:00:00Z')).toBe('se activa en la próxima revisión')
+})
+
+describe('aviso de ronda configurada (plantilla aprobada)', () => {
+  it('seis variables en el orden de la plantilla', () => {
+    const v = variablesRondaConfigurada({ destinatario: 'Juan Cruz', objetivo: 'Depósito Los Álamos', vigilador: 'Martín Ríos', activadaIso: '2026-11-19T17:37:00Z', distancia: 86.4, frecuenciaMin: 120 })
+    expect(v).toEqual(['Juan Cruz', 'Depósito Los Álamos', 'Martín Ríos', '19/11/2026 14:37', '86', 'cada 2 horas'])
+    const t = vistaPrevia(PLANTILLA_RONDA_CONFIGURADA.cuerpo, v)
+    expect(t).toMatch(/Objetivo: Depósito Los Álamos\nConfiguró: Martín Ríos \(vigilador\)/)
+    expect(t).toMatch(/Estado: RONDA ACTIVA/)
+  })
+  it('frecuencia en palabras', () => {
+    expect(textoFrecuencia(60)).toBe('cada 1 hora')
+    expect(textoFrecuencia(90)).toBe('cada 1 h 30 min')
   })
 })

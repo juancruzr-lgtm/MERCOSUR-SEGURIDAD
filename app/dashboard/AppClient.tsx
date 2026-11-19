@@ -14298,7 +14298,7 @@ const esGuardia = esRolGuardia(user.rol)
       // lecturas, diferencias). Administración/Gerencia y jefatura operativa;
       // el supervisor lo ve en la ficha de cada objetivo de su zona.
       ...(tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas') ? [{ id:'protocolos', icon:'📋', label:'Protocolos' }] : []),
-      ...(configuracionGuiadaVisible() && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas')) ? [{ id:'configuracion_guiada', icon:'🧩', label:'Configurar objetivos' }] : []),
+      ...(configuracionGuiadaVisible() && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas') || tieneCapacidad(user, 'supervisar_zona')) ? [{ id:'configuracion_guiada', icon:'🧩', label:'Configurar objetivos' }] : []),
       // Legajo Digital (una sola entrada): datos personales, documentación
       // (revisar, situación, vencimientos, auditoría) y archivo histórico.
       // Sólo puesto Administración o Gerencia (sin overrides). No Supervisión.
@@ -14452,7 +14452,14 @@ const esGuardia = esRolGuardia(user.rol)
               {page === 'afip_empleados' && gestionaDatosSensibles(user) && <LegajoDigital inicial="datos" user={user} />}
               {page === 'estatuto_interno' && tieneCapacidad(user, 'gestionar_personal') && <ControlEstatuto user={user} />}
               {page === 'protocolos' && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas')) && <ControlProtocolos />}
-              {page === 'configuracion_guiada' && configuracionGuiadaVisible() && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas')) && <ConfiguracionGuiadaPanel objetivos={objetivos} onIrARondas={() => setPage('rondas')} />}
+              {page === 'configuracion_guiada' && configuracionGuiadaVisible() && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas') || tieneCapacidad(user, 'supervisar_zona')) && (
+                <ConfiguracionGuiadaPanel
+                  objetivos={objetivos}
+                  puedeAprobar={tieneCapacidad(user, 'gestionar_personal') || ['jefe_supervisores', 'direccion_operativa', 'gerencia'].includes((user as any)?.puesto_organizacional ?? '')}
+                  nombrePersona={id => { const g = guardias.find((x: any) => x.id === id); return g ? `${g.nombre ?? ''} ${g.apellido ?? ''}`.trim() : 'el vigilador' }}
+                  onIrARondas={() => setPage('rondas')}
+                />
+              )}
               {page === 'legajo_digital' && gestionaDatosSensibles(user) && <LegajoDigital user={user} />}
               {page === 'gestion_administracion' && gestionAdministracionVisible() && gestionaDatosSensibles(user) && <TableroAdministracionPanel />}
               {/* Accesos anteriores (enlaces guardados): abren la misma pantalla en su sección. */}

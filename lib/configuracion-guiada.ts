@@ -1,32 +1,40 @@
 /**
  * lib/configuracion-guiada.ts
  *
- * Configuración guiada de un objetivo nuevo:
- *  1. Protocolo: formulario de preguntas simples → texto del protocolo, que se
- *     guarda con el RPC existente `protocolo_guardar` (queda vigente y le llega
- *     al vigilador con el aviso de protocolo que ya existe).
- *  2. Ronda por defecto: el vigilador marca dos puntos (un extremo y el otro
- *     del puesto). Con eso se crea una ronda de 2 puntos, cada 120 min, radio
- *     25 m, que queda PROPUESTA: se avisa a supervisores y jefes y empieza a
- *     regir sola a las 24 h salvo que alguien la cambie o la rechace. La
- *     primera semana es de prueba.
+ * Alta automática de protocolos y rondas (diseño aprobado por Gerencia,
+ * 19/11/2026 · docs/gestion-empresarial/configuracion-guiada.md).
+ *
+ *  1. Protocolo: el supervisor de la zona completa un formulario guiado; el
+ *     texto se arma SÓLO con lo que escribió y se envía a aprobación. Lo
+ *     aprueba Jefe de supervisores, Director técnico o Gerencia
+ *     (protocolo_hacer_vigente, ya existente) y le llega al vigilador.
+ *  2. Ronda: el vigilador de turno marca dos extremos del puesto. Si los
+ *     puntos son válidos, la ronda queda ACTIVA en ese momento (sin espera ni
+ *     período de prueba). La primera ventana exigible es la siguiente ventana
+ *     completa del turno: nunca se exige nada anterior a la activación.
+ *  3. Aviso a Gerencia, Director técnico, Jefe de supervisores y supervisor
+ *     de la zona.
  *
  * Las mismas validaciones se repiten en el servidor (migración 20261218120000).
  */
 
 export const RONDA_GUIADA = {
-  intervaloMinutos: 120,
-  radioMetros: 25,
-  precisionMaximaMetros: 25,
-  distanciaMinimaMetros: 20,
-  distanciaMaximaMetros: 300,
-  /** Distancia máxima de cada punto al centro del objetivo. */
-  alejamientoMaximoMetros: 500,
-  horasHastaActivar: 24,
-  diasDePrueba: 7,
+  /** Frecuencia inicial si el objetivo no tiene una propia. */
+  frecuenciaPorDefectoMinutos: 120,
+  /** Peor precisión GPS admitida para marcar un punto. */
+  precisionMaximaMetros: 30,
+  /** Margen sobre el radio del objetivo para considerar un punto "dentro". */
+  toleranciaAreaMetros: 25,
+  /** Radio del objetivo si no tiene uno cargado. */
+  radioObjetivoPorDefecto: 100,
+  /** Radio mínimo de cada punto de control al crearse. */
+  radioPuntoMinimoMetros: 25,
+  /** Intentos fallidos de GPS antes de ofrecer pasárselo al supervisor. */
+  intentosAntesDeDerivar: 3,
 } as const
 
 export interface PuntoGps { lat: number; lng: number; precision: number }
+export interface ObjetivoArea { lat: number | null; lng: number | null; radio_metros: number | null }
 
 /** Distancia en metros (haversine). */
 export function distanciaMetros(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
@@ -38,63 +46,82 @@ export function distanciaMetros(a: { lat: number; lng: number }, b: { lat: numbe
   return 2 * R * Math.asin(Math.sqrt(h))
 }
 
+/** Separación mínima para distinguir dos puntos: la suma de sus precisiones. */
+export function separacionMinima(a: PuntoGps, b: PuntoGps): number {
+  return Math.max(1, a.precision + b.precision)
+}
+
+/** Radio del área del objetivo para un punto: radio cargado + precisión + tolerancia. */
+export function radioArea(o: ObjetivoArea, precision: number): number {
+  return (o.radio_metros && o.radio_metros > 0 ? o.radio_metros : RONDA_GUIADA.radioObjetivoPorDefecto) + precision + RONDA_GUIADA.toleranciaAreaMetros
+}
+
 export type ProblemaPunto =
   | { tipo: 'sin_gps' }
   | { tipo: 'impreciso'; precision: number }
-  | { tipo: 'lejos_del_objetivo'; distancia: number }
-  | { tipo: 'muy_cerca'; distancia: number }
-  | { tipo: 'muy_lejos'; distancia: number }
+  | { tipo: 'fuera_del_objetivo'; distancia: number }
+  | { tipo: 'indistinguible'; distancia: number; minimo: number }
 
-/** Valida un punto (y, si es el segundo, su distancia al primero). null = válido. */
-export function validarPunto(p: PuntoGps | null, centroObjetivo: { lat: number; lng: number } | null, primero?: PuntoGps | null): ProblemaPunto | null {
-  if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lng)) return { tipo: 'sin_gps' }
-  if (!(p.precision <= RONDA_GUIADA.precisionMaximaMetros)) return { tipo: 'impreciso', precision: Math.round(p.precision) }
-  if (centroObjetivo) {
-    const d = distanciaMetros(p, centroObjetivo)
-    if (d > RONDA_GUIADA.alejamientoMaximoMetros) return { tipo: 'lejos_del_objetivo', distancia: Math.round(d) }
+/** Valida un punto (y, si es el segundo, que se distinga del primero). null = válido. */
+export function validarPunto(p: PuntoGps | null, objetivo: ObjetivoArea | null, primero?: PuntoGps | null): ProblemaPunto | null {
+  if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lng) || !Number.isFinite(p.precision)) return { tipo: 'sin_gps' }
+  if (p.precision > RONDA_GUIADA.precisionMaximaMetros) return { tipo: 'impreciso', precision: Math.round(p.precision) }
+  if (objetivo && objetivo.lat != null && objetivo.lng != null) {
+    const d = distanciaMetros(p, { lat: objetivo.lat, lng: objetivo.lng })
+    if (d > radioArea(objetivo, p.precision)) return { tipo: 'fuera_del_objetivo', distancia: Math.round(d) }
   }
   if (primero) {
     const d = distanciaMetros(p, primero)
-    if (d < RONDA_GUIADA.distanciaMinimaMetros) return { tipo: 'muy_cerca', distancia: Math.round(d) }
-    if (d > RONDA_GUIADA.distanciaMaximaMetros) return { tipo: 'muy_lejos', distancia: Math.round(d) }
+    const min = separacionMinima(primero, p)
+    if (d <= min) return { tipo: 'indistinguible', distancia: Math.round(d), minimo: Math.round(min) }
   }
   return null
 }
 
 export function textoProblema(p: ProblemaPunto): string {
   switch (p.tipo) {
-    case 'sin_gps': return 'No se pudo leer la ubicación. Activá el GPS y probá de nuevo.'
-    case 'impreciso': return `La ubicación es poco precisa (±${p.precision} m). Salí a un lugar abierto, esperá unos segundos y probá de nuevo.`
-    case 'lejos_del_objetivo': return `Estás a ${p.distancia} m del objetivo. Tenés que marcar el punto dentro del puesto.`
-    case 'muy_cerca': return `Este punto está a sólo ${p.distancia} m del primero. Caminá hasta el otro extremo del puesto.`
-    case 'muy_lejos': return `Este punto está a ${p.distancia} m del primero: es demasiado. Marcá el otro extremo del puesto, no un lugar fuera de él.`
+    case 'sin_gps': return 'No se pudo leer la ubicación. Activá el GPS del celular y probá de nuevo.'
+    case 'impreciso': return `Tu ubicación es poco precisa (±${p.precision} m). Salí a un lugar abierto, lejos de techos y paredes, y esperá unos segundos.`
+    case 'fuera_del_objetivo': return 'Este punto queda fuera del área del objetivo. Los puntos tienen que estar dentro del predio que controlás.'
+    case 'indistinguible': return `Este punto está a ${p.distancia} m del primero y con esta precisión hacen falta más de ${p.minimo} m para distinguirlos. Caminá hasta el otro extremo del puesto.`
   }
 }
 
-// ── Protocolo guiado ─────────────────────────────────────────────────────────
-
-export interface PreguntaProtocolo {
-  clave: string
-  titulo: string
-  ayuda: string
-  obligatoria: boolean
+/** Radio del punto de control: al menos 25 m, o el doble de la precisión con que se marcó. */
+export function radioPunto(precision: number): number {
+  return Math.max(RONDA_GUIADA.radioPuntoMinimoMetros, Math.ceil(precision * 2))
 }
 
+// ── Problemas que el vigilador puede informar ──────────────────────────────
+
+export const MOTIVOS_PROBLEMA = {
+  cerrado: 'Está cerrado con llave',
+  no_puede_dejar_puesto: 'No puedo dejar el ingreso solo',
+  peligro_obra: 'Es peligroso o está en obra',
+  gps: 'El GPS no da una ubicación precisa',
+  otro: 'Otro motivo',
+} as const
+export type MotivoProblema = keyof typeof MOTIVOS_PROBLEMA
+
+// ── Protocolo guiado ─────────────────────────────────────────────────────────
+
+export interface PreguntaProtocolo { clave: string; titulo: string; ayuda: string; obligatoria: boolean }
+
 export const PREGUNTAS_PROTOCOLO: PreguntaProtocolo[] = [
-  { clave: 'horario', titulo: 'Horario y modalidad del servicio', ayuda: 'Ej.: 24 h, lunes a viernes 8 a 20, con o sin relevo.', obligatoria: true },
-  { clave: 'tareas', titulo: 'Qué tiene que hacer el vigilador', ayuda: 'Tareas del puesto: control de accesos, recorridas, cierre de portones, etc.', obligatoria: true },
-  { clave: 'accesos', titulo: 'Control de accesos', ayuda: 'Quién puede entrar, cómo se registra, qué se pide a proveedores y visitas.', obligatoria: false },
-  { clave: 'prohibido', titulo: 'Qué está prohibido', ayuda: 'Ej.: abandonar el puesto, recibir paquetes, dejar entrar sin autorización.', obligatoria: true },
-  { clave: 'emergencias', titulo: 'Qué hacer ante una emergencia', ayuda: 'Incendio, intrusión, accidente: a quién llamar primero y qué hacer.', obligatoria: true },
-  { clave: 'contactos', titulo: 'Contactos', ayuda: 'Encargado del cliente, supervisor, policía, bomberos (con teléfono).', obligatoria: true },
-  { clave: 'novedades', titulo: 'Cómo informar novedades', ayuda: 'Libro de guardia, app, a quién avisar y cuándo.', obligatoria: false },
+  { clave: 'horario', titulo: 'Horarios y características del servicio', ayuda: 'Turnos, días, relevos, cuántos puestos.', obligatoria: true },
+  { clave: 'accesos', titulo: 'Accesos y sectores a controlar', ayuda: 'Portones, playa de camiones, perímetro, sectores sensibles.', obligatoria: true },
+  { clave: 'obligaciones', titulo: 'Obligaciones del vigilador', ayuda: 'Lo que tiene que hacer en el turno.', obligatoria: true },
+  { clave: 'prohibido', titulo: 'Restricciones y prohibiciones', ayuda: 'Lo que no puede hacer bajo ningún motivo.', obligatoria: true },
+  { clave: 'emergencias', titulo: 'Procedimientos ante novedades y emergencias', ayuda: 'Qué hacer primero y a quién avisar.', obligatoria: true },
+  { clave: 'contactos', titulo: 'Contactos y teléfonos importantes', ayuda: 'Con nombre y número.', obligatoria: true },
+  { clave: 'cliente', titulo: 'Instrucciones particulares del cliente', ayuda: 'Pedidos especiales del cliente (si hay).', obligatoria: false },
 ]
 
 export function faltantesProtocolo(r: Record<string, string>): string[] {
   return PREGUNTAS_PROTOCOLO.filter(p => p.obligatoria && !(r[p.clave] ?? '').trim()).map(p => p.titulo)
 }
 
-/** Arma el texto del protocolo a partir de las respuestas (sin inventar nada). */
+/** Arma el texto del protocolo SÓLO con lo respondido (no agrega instrucciones). */
 export function armarProtocolo(objetivoNombre: string, r: Record<string, string>): { titulo: string; texto: string } {
   const partes = PREGUNTAS_PROTOCOLO
     .filter(p => (r[p.clave] ?? '').trim())
@@ -105,47 +132,49 @@ export function armarProtocolo(objetivoNombre: string, r: Record<string, string>
   }
 }
 
-// ── Estado de la ronda propuesta ─────────────────────────────────────────────
+// ── Estados ──────────────────────────────────────────────────────────────────
 
-export type EstadoRondaGuiada = 'esperando_puntos' | 'propuesta' | 'activa' | 'modificada' | 'rechazada'
+export type EstadoRondaGuiada = 'esperando_puntos' | 'activa' | 'requiere_revision' | 'desactivada'
 
 export const ETIQUETA_ESTADO_RONDA_GUIADA: Record<EstadoRondaGuiada, string> = {
   esperando_puntos: 'Esperando que el vigilador marque los puntos',
-  propuesta: 'Propuesta: se activa sola salvo cambios',
   activa: 'Activa',
-  modificada: 'Cambiada por un supervisor (la activa quien la cambió)',
-  rechazada: 'Rechazada',
+  requiere_revision: 'Requiere revisión de supervisión',
+  desactivada: 'Desactivada',
 }
 
-/** Texto corto del tiempo que falta para que se active sola. */
-export function faltaParaActivar(activaDesdeIso: string, ahoraIso: string): string {
-  const min = Math.round((Date.parse(activaDesdeIso) - Date.parse(ahoraIso)) / 60_000)
-  if (min <= 0) return 'se activa en la próxima revisión'
-  if (min < 60) return `se activa en ${min} min`
-  return `se activa en ${Math.round(min / 60)} h`
+export function textoFrecuencia(minutos: number): string {
+  if (minutos % 60 === 0) return minutos === 60 ? 'cada 1 hora' : `cada ${minutos / 60} horas`
+  return `cada ${Math.floor(minutos / 60) ? `${Math.floor(minutos / 60)} h ` : ''}${minutos % 60} min`
 }
 
-// ── Aviso de ronda propuesta (plantilla para Meta) ──────────────────────────
+// ── Avisos (plantillas aprobadas en Meta el 19/11/2026) ─────────────────────
 
-export const PLANTILLA_RONDA_GUIADA_PROPUESTA = {
-  nombre: 'ronda_guiada_propuesta',
-  categoria: 'UTILITY',
-  idioma: 'es_AR',
+const limpia = (s: string, max = 60) => { const t = s.replace(/[\n\r\t]+/g, ' ').replace(/ {4,}/g, '   ').trim(); return t.length > max ? `${t.slice(0, max - 1)}…` : t }
+
+export const PLANTILLA_RONDA_CONFIGURADA = {
+  nombre: 'ronda_configurada_activa',
   cuerpo: [
-    'Hola {{1}}. El vigilador de *{{2}}* configuró la ronda del puesto: 2 puntos a {{3}} m, cada 2 horas.',
+    'Hola {{1}}. Se configuró una ronda nueva y ya está funcionando.',
     '',
-    'Empieza a regir sola el {{4}}, salvo que la cambies o la rechaces desde la app (Configurar objetivos).',
-    'La primera semana es de prueba.',
+    'Objetivo: {{2}}',
+    'Configuró: {{3}} (vigilador)',
+    'Fecha y hora: {{4}}',
+    'Distancia entre puntos: {{5}} m',
+    'Frecuencia: {{6}}',
+    'Estado: RONDA ACTIVA',
+    '',
+    'Podés ver el mapa y, si tenés permiso, cambiar los puntos o la frecuencia desde el botón.',
   ].join('\n'),
-  boton: { tipo: 'URL', texto: 'Revisar la ronda', url: 'https://mercosur-seguridad.vercel.app/dashboard?page={{1}}' },
+  /** Sufijo del botón dinámico `…/dashboard?page={{1}}`. */
+  boton: 'rondas',
 } as const
 
-export function variablesRondaPropuesta(destinatario: string, objetivo: string, distancia: number, activaDesdeIso: string): string[] {
-  const cuando = new Date(activaDesdeIso).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-  const limpia = (s: string, max = 60) => { const t = s.replace(/[\n\r\t]+/g, ' ').trim(); return t.length > max ? `${t.slice(0, max - 1)}…` : t }
-  return [limpia(destinatario || 'equipo', 40), limpia(objetivo), String(Math.round(distancia)), cuando]
+export function variablesRondaConfigurada(p: { destinatario: string; objetivo: string; vigilador: string; activadaIso: string; distancia: number; frecuenciaMin: number }): string[] {
+  const cuando = new Date(p.activadaIso).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).replace(',', '')
+  return [limpia(p.destinatario || 'equipo', 40), limpia(p.objetivo), limpia(p.vigilador || 'vigilador', 60), cuando, String(Math.round(p.distancia)), textoFrecuencia(p.frecuenciaMin)]
 }
 
-export function vistaPreviaRondaPropuesta(v: string[]): string {
-  return PLANTILLA_RONDA_GUIADA_PROPUESTA.cuerpo.replace(/\{\{(\d)\}\}/g, (_, n) => v[Number(n) - 1] ?? '')
+export function vistaPrevia(cuerpo: string, v: string[]): string {
+  return cuerpo.replace(/\{\{(\d)\}\}/g, (_, n) => v[Number(n) - 1] ?? '')
 }

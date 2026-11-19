@@ -1,42 +1,47 @@
 /**
  * lib/objetivo-sin-configurar.ts
  *
- * Aviso por WhatsApp a los jefes operativos cuando se crea un objetivo que
- * NO tiene protocolo vigente NI rondas activas.
+ * Aviso por WhatsApp (plantilla `objetivo_nuevo_sin_configurar`, aprobada en
+ * Meta el 19/11/2026) cuando se crea un objetivo al que le falta el protocolo
+ * vigente o la ronda activa (o las dos cosas).
  *
  * Reglas:
  *  - Sólo objetivos CREADOS DESPUÉS de la activación (corte): los que ya
- *    existían sin configurar no generan un envío masivo; se ven en el tablero.
- *  - Se espera un margen desde la creación (por defecto 30 min) para dar
- *    tiempo a cargarlos antes de avisar.
+ *    existían sin configurar no generan un envío masivo.
+ *  - Se espera un margen desde la creación (30 min) para dar tiempo a cargar.
  *  - Un solo aviso por objetivo y destinatario (clave de envío única).
- *  - Si el objetivo ya tiene protocolo O rondas al momento de evaluar, no se
- *    avisa (la orden pide avisar cuando falta todo).
  *  - Objetivos de prueba o inactivos no cuentan.
- *
- * WhatsApp exige una plantilla aprobada por Meta para mensajes que inicia la
- * empresa: el texto fijo va en la plantilla y sólo cambian las variables.
  */
 
 export interface ObjetivoNuevo {
   id: string
   nombre: string
   cliente: string | null
-  direccion: string | null
+  direccion?: string | null
   estado: string | null
   es_prueba: boolean | null
   created_at: string
+  zona_id?: string | null
 }
 
 export interface Candidato {
   objetivoId: string
   nombre: string
   cliente: string
-  direccion: string
+  zonaId: string | null
+  /** "protocolo y ronda" · "protocolo" · "ronda" */
+  falta: string
   minutosDesdeCreacion: number
 }
 
 export const ESPERA_MINUTOS_POR_DEFECTO = 30
+
+export function textoFalta(sinProtocolo: boolean, sinRonda: boolean): string | null {
+  if (sinProtocolo && sinRonda) return 'protocolo y ronda'
+  if (sinProtocolo) return 'protocolo'
+  if (sinRonda) return 'ronda'
+  return null
+}
 
 export function objetivosSinConfigurar(p: {
   objetivos: ObjetivoNuevo[]
@@ -60,12 +65,14 @@ export function objetivosSinConfigurar(p: {
     const creado = Date.parse(o.created_at)
     if (!(creado >= corte)) { d('creado_antes_de_activar'); continue }
     if (ahora - creado < espera) { d('dentro_del_margen'); continue }
-    if (p.conProtocolo.has(o.id) || p.conRondas.has(o.id)) { d('ya_configurado'); continue }
+    const falta = textoFalta(!p.conProtocolo.has(o.id), !p.conRondas.has(o.id))
+    if (!falta) { d('ya_configurado'); continue }
     candidatos.push({
       objetivoId: o.id,
       nombre: o.nombre.trim() || 'Objetivo sin nombre',
       cliente: (o.cliente ?? '').trim() || 'sin cliente',
-      direccion: (o.direccion ?? '').trim() || 'sin dirección cargada',
+      zonaId: o.zona_id ?? null,
+      falta,
       minutosDesdeCreacion: Math.round((ahora - creado) / 60_000),
     })
   }
@@ -78,35 +85,27 @@ export function limpiarVariable(s: string, max = 60): string {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t
 }
 
-/** Variables en el orden de la plantilla: {{1}} nombre, {{2}} objetivo, {{3}} cliente, {{4}} dirección. */
+/** Variables en el orden de la plantilla: {{1}} nombre, {{2}} objetivo, {{3}} cliente, {{4}} lo que falta. */
 export function variablesAviso(destinatarioNombre: string, c: Candidato): string[] {
-  return [limpiarVariable(destinatarioNombre || 'equipo', 40), limpiarVariable(c.nombre), limpiarVariable(c.cliente), limpiarVariable(c.direccion, 80)]
+  return [limpiarVariable(destinatarioNombre || 'equipo', 40), limpiarVariable(c.nombre), limpiarVariable(c.cliente), c.falta]
 }
 
-/**
- * Texto de la plantilla para presentar a Meta (categoría UTILIDAD, idioma
- * es_AR). Lo fijo no se puede cambiar sin volver a aprobarla.
- */
+/** Texto aprobado en Meta (no cambiar sin volver a aprobar la plantilla). */
 export const PLANTILLA_OBJETIVO_SIN_CONFIGURAR = {
   nombre: 'objetivo_nuevo_sin_configurar',
-  categoria: 'UTILITY',
-  idioma: 'es_AR',
   cuerpo: [
-    'Hola {{1}}. Se dio de alta el objetivo *{{2}}* (cliente {{3}}, {{4}}) y todavía no tiene protocolo ni rondas cargados.',
+    'Hola {{1}}. Se dio de alta el objetivo {{2}} (cliente {{3}}) y todavía le falta: {{4}}.',
     '',
-    'Para dejarlo listo, entrá a la app Mercosur Seguridad:',
-    '1) Protocolos: elegí el objetivo, cargá las instrucciones del puesto y guardalas.',
-    '2) Rondas: creá la ronda del objetivo, con su horario y cada cuántos minutos se hace.',
-    '3) Puntos de control: agregá los puntos de la ronda (GPS o QR) recorriendo el lugar.',
-    '4) Revisá que la frecuencia de supervisión del objetivo sea la correcta.',
+    'Qué hay que hacer:',
+    '1) Protocolo: el supervisor de la zona completa el formulario en la app y lo envía a aprobación.',
+    '2) Ronda: al vigilador de turno le va a aparecer el pedido para marcar los dos extremos del puesto. La ronda queda activa apenas termina.',
     '',
-    'Hasta que esté cargado, los vigiladores no tienen instrucciones ni rondas que cumplir en ese lugar.',
+    'Hasta que esté completo, el vigilador no tiene instrucciones ni rondas que cumplir en ese lugar.',
   ].join('\n'),
-  pie: 'Aviso automático de Mercosur Seguridad',
-  boton: { tipo: 'URL', texto: 'Abrir el objetivo', url: 'https://mercosur-seguridad.vercel.app/dashboard?page={{1}}' },
+  /** Sufijo del botón dinámico `…/dashboard?page={{1}}`. */
+  boton: 'configuracion_guiada',
 } as const
 
-/** Vista previa del mensaje tal como lo recibiría una persona. */
 export function vistaPrevia(variables: string[]): string {
   return PLANTILLA_OBJETIVO_SIN_CONFIGURAR.cuerpo.replace(/\{\{(\d)\}\}/g, (_, n) => variables[Number(n) - 1] ?? '')
 }
