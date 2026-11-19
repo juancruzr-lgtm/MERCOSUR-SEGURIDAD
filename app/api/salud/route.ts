@@ -1,0 +1,72 @@
+import { NextResponse } from 'next/server'
+import { evaluarSalud, extraerMetricas, type Medicion } from '@/lib/salud'
+
+/**
+ * GET /api/salud — chequeo de salud para el vigía externo (incidente 18/11/2026).
+ *
+ * Lo consulta el workflow .github/workflows/vigia.yml cada ~1 minuto desde
+ * afuera de Supabase y de Vercel. También sirve para UptimeRobot / Better Stack:
+ * responde 503 cuando la base o el login no responden.
+ *
+ * Público y sin datos personales: sólo latencias, cifras agregadas y semáforo.
+ * Cada consulta tiene tiempo máximo propio, así un problema no traba al chequeo.
+ * monitor_salud() tarda ~10 ms y sólo lee (ver migración 20261216150000).
+ */
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const runtime = 'nodejs'
+export const maxDuration = 15
+
+const URL_SB = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
+const ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
+const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
+
+async function medir(url: string, init: RequestInit, timeoutMs: number): Promise<Medicion & { cuerpo?: string }> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  const t0 = Date.now()
+  try {
+    const res = await fetch(url, { ...init, cache: 'no-store', signal: ctrl.signal })
+    const cuerpo = await res.text()
+    return { ok: res.ok, status: res.status, ms: Date.now() - t0, cuerpo }
+  } catch (e: any) {
+    return { ok: false, status: 0, ms: Date.now() - t0, error: e?.name === 'AbortError' ? 'timeout' : 'sin_respuesta' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export async function GET() {
+  const t0 = Date.now()
+  const [base, auth, metricas] = await Promise.all([
+    medir(`${URL_SB}/rest/v1/rpc/monitor_salud`, {
+      method: 'POST',
+      headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    }, 4000),
+    medir(`${URL_SB}/auth/v1/health`, { headers: { apikey: ANON } }, 3000),
+    medir(`${URL_SB}/customer/v1/privileged/metrics`, {
+      headers: { Authorization: `Basic ${Buffer.from(`service_role:${SERVICE}`).toString('base64')}` },
+    }, 4000),
+  ])
+
+  let datosBase: any = null
+  if (base.ok && base.cuerpo) { try { datosBase = JSON.parse(base.cuerpo) } catch { /* se informa como falla */ } }
+  const recursos = metricas.ok && metricas.cuerpo ? extraerMetricas(metricas.cuerpo) : null
+
+  const resultado = evaluarSalud({
+    base: { ok: base.ok && !!datosBase, status: base.status, ms: base.ms, error: base.error },
+    auth: { ok: auth.ok, status: auth.status, ms: auth.ms, error: auth.error },
+    metricas: { ok: metricas.ok, status: metricas.status, ms: metricas.ms, error: metricas.error },
+    datosBase,
+    recursos,
+  })
+
+  return NextResponse.json(
+    { ...resultado, ms_total: Date.now() - t0, ts: new Date().toISOString() },
+    {
+      status: resultado.estado === 'caido' ? 503 : 200,
+      headers: { 'Cache-Control': 'no-store, max-age=0' },
+    },
+  )
+}
