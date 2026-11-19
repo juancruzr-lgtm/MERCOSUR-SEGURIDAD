@@ -32,9 +32,10 @@ Un control automático que corre **en GitHub Actions**, afuera de Supabase y de 
 | Lectura desde memoria (cache hit) | < 98 % | < 95 % |
 | CPU de la base (Metrics API) | ≥ 70 % | ≥ 90 % |
 | Disco ocupado (% del tiempo, Metrics API) | ≥ 80 % | ≥ 95 % |
-| Saldo de Disk IO (si Supabase lo publica) | < 40 % | < 15 % |
+| **Disk IO Budget (estimado)**: disco por encima del límite base de MICRO (87 MB/s o 500 IOPS, configurable con `VIGIA_IO_BASE_MBS` / `VIGIA_IO_BASE_IOPS`) | 5 min seguidos | 15 min seguidos |
+| Saldo de Disk IO publicado (hoy Supabase no lo publica en la Metrics API; si aparece, se usa) | < 40 % | < 15 % |
 | RAM | ≥ 85 % | ≥ 95 % |
-| Espacio en disco | ≥ 70 % | ≥ 85 % |
+| Espacio en el disco de la base (`/data`; no el del sistema) | ≥ 70 % | ≥ 85 % |
 | Tareas automáticas (crons) | 1 falla en 30 min o una colgada más de 10 min | 3 fallas, o ninguna corrió en 12 min |
 | Turnos empezados hace 30 min a 3 h sin fichaje | 2 o más | 3 o más **y** al menos la mitad de los turnos |
 | Ingresos en la app (telemetría, 30 min) | menos de la mitad confirmados (con 4 o más iniciados) | 0 confirmados con 4 o más iniciados |

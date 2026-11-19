@@ -44,6 +44,11 @@ export const REGLAS = {
   lentitudMs: { base: 2000, app: 5000 },
   cpuPct: { amarillo: 70, rojo: 90 },
   discoOcupadoPct: { amarillo: 80, rojo: 95 },   // % del tiempo con el disco ocupado
+  // Disk IO Budget: Supabase no lo publica como métrica. Se estima: mientras el
+  // disco trabaja por encima del límite BASE del tamaño de la base, se gasta el
+  // presupuesto de ráfaga. Valores de MICRO (tabla de Supabase); configurables.
+  ioBase: { mbs: Number(E.VIGIA_IO_BASE_MBS || 87), iops: Number(E.VIGIA_IO_BASE_IOPS || 500) },
+  ioSobreBaseMin: { rojo: 15 },   // amarillo desde el 1.er minuto (se abre a los 5 seguidos)
 }
 if (PRUEBA) { REGLAS.abrir.rojo = 1; REGLAS.cerrar.rojo = 1 }
 
@@ -96,6 +101,11 @@ export function problemasDe({ app, auth, ping, salud, saludJson, tasas }) {
     if (tasas.cpuPct >= REGLAS.cpuPct.rojo) add('cpu', 'rojo', 'CPU de la base saturada', `${tasas.cpuPct}%`)
     else if (tasas.cpuPct >= REGLAS.cpuPct.amarillo) add('cpu', 'amarillo', 'CPU de la base alta', `${tasas.cpuPct}%`)
   }
+  if (tasas?.minSobreBase > 0) {
+    const det = `${tasas.minSobreBase} min por encima del límite base (${tasas.totalMBs} MB/s de ${REGLAS.ioBase.mbs}, ${tasas.iops} IOPS de ${REGLAS.ioBase.iops})`
+    if (tasas.minSobreBase >= REGLAS.ioSobreBaseMin.rojo) add('disk_io_budget', 'rojo', 'Se está agotando el presupuesto de Disk IO', det)
+    else add('disk_io_budget', 'amarillo', 'La base está gastando presupuesto de Disk IO', det)
+  }
   if (tasas?.discoOcupadoPct != null) {
     if (tasas.discoOcupadoPct >= REGLAS.discoOcupadoPct.rojo) add('disco_io', 'rojo', 'Disco de la base saturado (riesgo de Disk IO)', `${tasas.discoOcupadoPct}% ocupado, ${tasas.lecturaMBs} MB/s leídos`)
     else if (tasas.discoOcupadoPct >= REGLAS.discoOcupadoPct.amarillo) add('disco_io', 'amarillo', 'Disco de la base muy exigido', `${tasas.discoOcupadoPct}% ocupado, ${tasas.lecturaMBs} MB/s leídos`)
@@ -114,7 +124,17 @@ export function calcularTasas(prev, rec, tsMs) {
   if (rec.cpu_total_seg != null && prev.cpu_total_seg != null && dTot > 0) out.cpuPct = Math.round((1 - dOci / dTot) * 100)
   if (rec.disco_io_seg != null && prev.disco_io_seg != null) out.discoOcupadoPct = Math.min(100, Math.round(((rec.disco_io_seg - prev.disco_io_seg) / dt) * 100))
   if (rec.disco_leido_bytes != null && prev.disco_leido_bytes != null) out.lecturaMBs = Math.round(((rec.disco_leido_bytes - prev.disco_leido_bytes) / dt / 1048576) * 10) / 10
+  if (rec.disco_escrito_bytes != null && prev.disco_escrito_bytes != null) out.escrituraMBs = Math.round(((rec.disco_escrito_bytes - prev.disco_escrito_bytes) / dt / 1048576) * 10) / 10
+  if (out.lecturaMBs != null || out.escrituraMBs != null) out.totalMBs = Math.round(((out.lecturaMBs ?? 0) + (out.escrituraMBs ?? 0)) * 10) / 10
+  if (rec.disco_ops != null && prev.disco_ops != null) out.iops = Math.round((rec.disco_ops - prev.disco_ops) / dt)
   return out
+}
+
+// Minutos seguidos por encima del límite base de disco (estimación del Disk IO Budget).
+export function minutosSobreBase(previos, tasas) {
+  if (!tasas || (tasas.totalMBs == null && tasas.iops == null)) return previos ?? 0
+  const sobre = (tasas.totalMBs ?? 0) > REGLAS.ioBase.mbs || (tasas.iops ?? 0) > REGLAS.ioBase.iops
+  return sobre ? (previos ?? 0) + 1 : 0
 }
 
 // ── GitHub Issues = registro de incidentes ─────────────────────────────────────
@@ -237,11 +257,14 @@ async function chequear(estado) {
   const rec = saludJson?.recursos ?? null
   const tasas = calcularTasas(estado.previo, rec, ts)
   if (rec) estado.previo = { ...rec, ts }
+  estado.minSobreBase = minutosSobreBase(estado.minSobreBase, tasas)
+  if (tasas) tasas.minSobreBase = estado.minSobreBase
 
   const problemas = problemasDe({ app, auth, ping, salud, saludJson, tasas })
   const fila = {
     hora: ahoraAR(), app: describir(app), login: describir(auth), base: describir(ping),
     salud: saludJson?.estado ?? describir(salud), cpu: tasas?.cpuPct ?? '—', disco_ocupado: tasas?.discoOcupadoPct ?? '—',
+    disco_mbs: tasas?.totalMBs ?? '—', iops: tasas?.iops ?? '—',
     ram: rec?.ram_usada_pct ?? '—', problemas: problemas.map(p => p.clave).join(', ') || '—',
   }
   console.log(JSON.stringify(fila))
@@ -302,7 +325,7 @@ async function main() {
   }
 
   if (E.GITHUB_STEP_SUMMARY) {
-    const cols = ['hora', 'app', 'login', 'base', 'salud', 'cpu', 'disco_ocupado', 'ram', 'problemas']
+    const cols = ['hora', 'app', 'login', 'base', 'salud', 'cpu', 'disco_ocupado', 'disco_mbs', 'iops', 'ram', 'problemas']
     const md = [`### Vigía Mercosur ${PRUEBA ? '(prueba)' : ''}`, '', `| ${cols.join(' | ')} |`, `|${cols.map(() => '---').join('|')}|`,
       ...filas.map(f => `| ${cols.map(c => f[c]).join(' | ')} |`)].join('\n')
     fs.appendFileSync(E.GITHUB_STEP_SUMMARY, md + '\n')

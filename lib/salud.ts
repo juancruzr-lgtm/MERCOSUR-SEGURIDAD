@@ -35,6 +35,8 @@ export interface Recursos {
   disco_leido_bytes: number | null
   disco_escrito_bytes: number | null
   disco_io_seg: number | null
+  /** Operaciones de disco completadas (lecturas + escrituras), contador → IOPS. */
+  disco_ops: number | null
   disco_usado_pct: number | null
   /** Series que parecen saldo de IO/créditos (la Metrics API está en beta). */
   io_saldo: Record<string, number>
@@ -91,7 +93,8 @@ export function extraerMetricas(texto: string): Recursos {
       cpuTotal += valor
       if (/mode="(idle|iowait)"/.test(etiquetas)) cpuOcioso += valor
     } else if (nombre === 'node_disk_read_bytes_total' || nombre === 'node_disk_written_bytes_total'
-      || nombre === 'node_disk_io_time_seconds_total') {
+      || nombre === 'node_disk_io_time_seconds_total'
+      || nombre === 'node_disk_reads_completed_total' || nombre === 'node_disk_writes_completed_total') {
       suma[nombre] = (suma[nombre] ?? 0) + valor
     } else if (nombre === 'node_filesystem_size_bytes' || nombre === 'node_filesystem_avail_bytes') {
       const mp = etiquetas.match(/mountpoint="([^"]*)"/)?.[1] ?? '?'
@@ -122,6 +125,8 @@ export function extraerMetricas(texto: string): Recursos {
     disco_leido_bytes: suma.node_disk_read_bytes_total ?? null,
     disco_escrito_bytes: suma.node_disk_written_bytes_total ?? null,
     disco_io_seg: suma.node_disk_io_time_seconds_total ?? null,
+    disco_ops: suma.node_disk_reads_completed_total != null || suma.node_disk_writes_completed_total != null
+      ? (suma.node_disk_reads_completed_total ?? 0) + (suma.node_disk_writes_completed_total ?? 0) : null,
     disco_usado_pct: discoPct,
     io_saldo: ioSaldo,
     discos,
