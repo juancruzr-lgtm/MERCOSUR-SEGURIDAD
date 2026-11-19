@@ -82,14 +82,22 @@ El código ya lo envía cuando un incidente crítico comienza, escala o se recup
 
 Los secretos van en GitHub y no en Supabase para que el aviso salga aunque la base esté caída.
 
-## Respaldo opcional: UptimeRobot o Better Stack (cuenta gratis)
+## Respaldo recomendado: Better Stack (cuenta gratis)
 
-GitHub puede demorar la ejecución agendada algunos minutos en horas pico. Para tener un segundo vigía independiente (1 a 5 min, SMS o app propia):
+GitHub **no garantiza** el horario de los workflows agendados: puede demorarlos o saltearlos en horas pico. En la primera noche, además, tardó en arrancar el horario (ver el informe). Por eso conviene un segundo vigía con horario garantizado, que además vigile que el de GitHub siga corriendo.
 
-- Crear la cuenta (requiere a Gerencia; no se crearon cuentas a su nombre).
-- Monitor tipo **HTTP(s)** a `https://mercosur-seguridad.vercel.app/api/salud`: alerta si responde distinto de 200. Responde 503 cuando la base o el login no responden.
-- Monitor tipo **Keyword** a la misma URL: alerta si aparece `"estado":"degradado"`.
-- Contactos: email y app de los dos destinatarios.
+**Better Stack Uptime** (plan gratis: chequeos cada 3 minutos, app del celular, email). UptimeRobot sirve igual, con chequeos cada 5 minutos.
+
+1. **Crear la cuenta.** La crea Gerencia: no se crearon cuentas a su nombre. Sumar a Juan Cruz y a Facundo como miembros, con email y la app del celular.
+2. **Monitor 1, "App y base":**
+   - tipo *URL returns HTTP status* (o *Keyword*) a `https://mercosur-seguridad.vercel.app/api/salud`, cada 3 minutos;
+   - alerta si responde distinto de 200. La app responde **503** cuando la base o el login no responden.
+3. **Monitor 2, "Saturación":** tipo *Keyword* a la misma URL; alerta si **contiene** `"estado":"degradado"`.
+4. **Monitor 3, "El vigía corre" (heartbeat):**
+   - crear un *Heartbeat* con período de 10 minutos y gracia de 10 minutos, y copiar su URL;
+   - cargarla en GitHub → Settings → Secrets and variables → Actions → secret **`VIGIA_LATIDO_URL`**;
+   - el vigía la llama al final de cada corrida. Si GitHub deja de ejecutarlo, Better Stack avisa.
+5. **Política de escalamiento:** avisar primero a Juan Cruz y, si no lo reconoce en 10 minutos, a Facundo.
 
 ## Qué hacer cuando llega una alerta
 

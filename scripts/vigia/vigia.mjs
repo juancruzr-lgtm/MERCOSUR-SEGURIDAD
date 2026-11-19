@@ -343,6 +343,13 @@ async function main() {
       ...filas.map(f => `| ${cols.map(c => f[c]).join(' | ')} |`)].join('\n')
     fs.appendFileSync(E.GITHUB_STEP_SUMMARY, md + '\n')
   }
+
+  // Latido opcional (Better Stack / UptimeRobot "heartbeat"): si GitHub deja de
+  // correr el vigía, ese servicio externo avisa que el vigía se detuvo.
+  if (!PRUEBA && E.VIGIA_LATIDO_URL) {
+    const r = await medir(E.VIGIA_LATIDO_URL, {}, 10000)
+    console.log(`Latido externo: ${describir(r)}`)
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || process.argv[1]?.endsWith('vigia.mjs')) {

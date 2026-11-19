@@ -76,6 +76,8 @@ jobs:
           WHATSAPP_PHONE_ID: ${{ secrets.VIGIA_WHATSAPP_PHONE_ID }}
           ALERTA_TELEFONOS: ${{ secrets.VIGIA_ALERTA_TELEFONOS }}
           ALERTA_PLANTILLA: ${{ vars.VIGIA_ALERTA_PLANTILLA }}
+          # Latido opcional a Better Stack / UptimeRobot (vigila que el vigía corra).
+          VIGIA_LATIDO_URL: ${{ secrets.VIGIA_LATIDO_URL }}
         run: node scripts/vigia/vigia.mjs
 
       - name: Guardar estado
