@@ -124,3 +124,28 @@ export function faltaParaActivar(activaDesdeIso: string, ahoraIso: string): stri
   if (min < 60) return `se activa en ${min} min`
   return `se activa en ${Math.round(min / 60)} h`
 }
+
+// ── Aviso de ronda propuesta (plantilla para Meta) ──────────────────────────
+
+export const PLANTILLA_RONDA_GUIADA_PROPUESTA = {
+  nombre: 'ronda_guiada_propuesta',
+  categoria: 'UTILITY',
+  idioma: 'es_AR',
+  cuerpo: [
+    'Hola {{1}}. El vigilador de *{{2}}* configuró la ronda del puesto: 2 puntos a {{3}} m, cada 2 horas.',
+    '',
+    'Empieza a regir sola el {{4}}, salvo que la cambies o la rechaces desde la app (Configurar objetivos).',
+    'La primera semana es de prueba.',
+  ].join('\n'),
+  boton: { tipo: 'URL', texto: 'Revisar la ronda', url: 'https://mercosur-seguridad.vercel.app/dashboard?page={{1}}' },
+} as const
+
+export function variablesRondaPropuesta(destinatario: string, objetivo: string, distancia: number, activaDesdeIso: string): string[] {
+  const cuando = new Date(activaDesdeIso).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  const limpia = (s: string, max = 60) => { const t = s.replace(/[\n\r\t]+/g, ' ').trim(); return t.length > max ? `${t.slice(0, max - 1)}…` : t }
+  return [limpia(destinatario || 'equipo', 40), limpia(objetivo), String(Math.round(distancia)), cuando]
+}
+
+export function vistaPreviaRondaPropuesta(v: string[]): string {
+  return PLANTILLA_RONDA_GUIADA_PROPUESTA.cuerpo.replace(/\{\{(\d)\}\}/g, (_, n) => v[Number(n) - 1] ?? '')
+}

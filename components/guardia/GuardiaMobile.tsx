@@ -18,6 +18,8 @@ import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
 import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
 import LectorProtocolo from '@/components/protocolos/LectorProtocolo'
 import AvisoProtocoloIngreso from '@/components/protocolos/AvisoProtocoloIngreso'
+import RondaGuiadaCaptura from '@/components/configuracion-guiada/RondaGuiadaCaptura'
+import { configuracionGuiadaVisible } from '@/lib/tablero-gerencia/acceso'
 import { limpiarProtocolosLocales, useProtocolosVigilador } from '@/components/protocolos/useProtocolosVigilador'
 import { documentosDeTurno } from '@/lib/protocolos'
 import TareasTurnoVigilador from '@/components/tareas/TareasTurnoVigilador'
@@ -2476,6 +2478,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
           Nunca durante un fichaje y siempre después del teléfono; si el pedido está
           cerrado o falla, no se muestra. */}
       {!telModalAbierto && !passModalAbierto && ingresoFase === 'idle' && fichando === null && user?.id && <PedidoCredencial empleadoId={user.id} />}
+
+      {/* Configuración guiada: si el jefe pidió la ronda del objetivo, el vigilador marca los dos extremos del puesto. */}
+      {configuracionGuiadaVisible() && !telModalAbierto && !passModalAbierto && ingresoFase === 'idle' && fichando === null && <RondaGuiadaCaptura />}
 
       {/* Captura de teléfono del vigilador (avisos por WhatsApp). COMPUERTA dura
           y obligatoria: sin "Ahora no", sin snooze, sin cerrar ni saltear. La
