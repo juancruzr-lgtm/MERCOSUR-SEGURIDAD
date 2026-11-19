@@ -4,9 +4,11 @@
 
 ## Qué es
 
-Un control automático que corre **en GitHub Actions**, afuera de Supabase y de Vercel. Si la base de datos se satura o se cae, el vigía sigue funcionando y avisa. Los avisos que ya existían en la app (pg_cron: escalamientos, push, WhatsApp de rondas) salen de la propia base y se caen con ella.
+**Monitor principal: Better Stack** (ver abajo). Corre en servidores propios y avisa por email aunque GitHub, Supabase o Vercel estén caídos.
 
-- Workflow: `.github/workflows/vigia.yml`, agendado cada 5 min. Cada corrida hace **5 chequeos separados ~60 s**, así que hay un chequeo por minuto.
+**Complementario:** un control automático que corre **en GitHub Actions**, afuera de Supabase y de Vercel. Si la base de datos se satura o se cae, el vigía sigue funcionando y avisa. Los avisos que ya existían en la app (pg_cron: escalamientos, push, WhatsApp de rondas) salen de la propia base y se caen con ella.
+
+- Workflow: `.github/workflows/vigia.yml`, agendado cada 5 min (minutos 2, 7, 12…). GitHub **no garantiza** ese horario: el 19/11 no ejecutó ninguna corrida agendada en 7,5 h. Cada corrida hace **5 chequeos separados ~60 s**, así que hay un chequeo por minuto.
 - Script: `scripts/vigia/vigia.mjs`. Usa Node 20 sin dependencias.
 - Chequeo de salud de la app: `GET /api/salud`. Es público, sin datos personales, y responde 503 si la base o el login no responden.
 - Funciones en la base (migración `20261216150000`), las dos de solo lectura:
@@ -82,22 +84,46 @@ El código ya lo envía cuando un incidente crítico comienza, escala o se recup
 
 Los secretos van en GitHub y no en Supabase para que el aviso salga aunque la base esté caída.
 
-## Respaldo recomendado: Better Stack (cuenta gratis)
+## Monitor principal: Better Stack (EN PRODUCCIÓN desde el 19/11/2026)
 
-GitHub **no garantiza** el horario de los workflows agendados: puede demorarlos o saltearlos en horas pico. En la primera noche, además, tardó en arrancar el horario (ver el informe). Por eso conviene un segundo vigía con horario garantizado, que además vigile que el de GitHub siga corriendo.
+GitHub **no ejecutó ninguna corrida agendada** entre las 02:48 y las 10:30 UTC del 19/11, aunque el workflow estaba activo. Por eso el monitor principal es **Better Stack Uptime**: plan **Free**, sin tarjeta cargada. Corre en sus propios servidores y chequea desde Europa, Norteamérica y Asia. No depende de GitHub, Supabase, Vercel ni de que haya una computadora encendida.
 
-**Better Stack Uptime** (plan gratis: chequeos cada 3 minutos, app del celular, email). UptimeRobot sirve igual, con chequeos cada 5 minutos.
+- Cuenta de Juan Cruz Romero (equipo `t638321`): https://uptime.betterstack.com/team/t638321/monitors
+- Avisos: **email** a Juan Cruz cuando empieza el problema y cuando se recupera. El push al celular, los SMS y las llamadas son de pago.
 
-1. **Crear la cuenta.** La crea Gerencia: no se crearon cuentas a su nombre. Sumar a Juan Cruz y a Facundo como miembros, con email y la app del celular.
-2. **Monitor 1, "App y base":**
-   - tipo *URL returns HTTP status* (o *Keyword*) a `https://mercosur-seguridad.vercel.app/api/salud`, cada 3 minutos;
-   - alerta si responde distinto de 200. La app responde **503** cuando la base o el login no responden.
-3. **Monitor 2, "Saturación":** tipo *Keyword* a la misma URL; alerta si **contiene** `"estado":"degradado"`.
-4. **Monitor 3, "El vigía corre" (heartbeat):**
-   - crear un *Heartbeat* con período de 10 minutos y gracia de 10 minutos, y copiar su URL;
-   - cargarla en GitHub → Settings → Secrets and variables → Actions → secret **`VIGIA_LATIDO_URL`**;
-   - el vigía la llama al final de cada corrida. Si GitHub deja de ejecutarlo, Better Stack avisa.
-5. **Política de escalamiento:** avisar primero a Juan Cruz y, si no lo reconoce en 10 minutos, a Facundo.
+| Monitor | Qué chequea | Cada | Alerta si | Confirma | Se recupera tras |
+|---|---|---|---|---|---|
+| App y base (api salud) | `GET /api/salud` | 3 min | no da 2xx (la app responde **503** si la base o el login no contestan) o tarda más de 30 s | 1 min | 3 min bien |
+| App (pantalla principal) | `GET /dashboard` | 3 min | no da 2xx | 1 min | 3 min bien |
+| Saturación (estado degradado) | `GET /api/salud` | 3 min | la respuesta contiene `"estado":"degradado"` | 5 min | 3 min bien |
+| Latido "Vigia de GitHub corre" | el vigía de GitHub lo llama al final de cada corrida | 30 min + 30 de gracia | GitHub pasa **1 hora** sin ejecutar el vigía | — | al llegar el siguiente latido |
+| mercosurseguridad.com.ar | sitio institucional (lo creó la bienvenida de Better Stack) | 3 min | no responde | — | — |
+| PRUEBA caida simulada | monitor de prueba, **pausado** | — | — | — | — |
+
+**Contra falsas alarmas y avisos duplicados:**
+- Better Stack confirma cada falla desde otra región antes de abrir el incidente, y abre uno solo por monitor hasta que se recupera.
+- "Saturación" espera 5 min, así no avisa por un pico de un minuto.
+- El latido tolera 1 hora: GitHub suele demorar o saltear corridas y eso no es una caída de la app.
+- Si se cae todo, llegan 2 o 3 emails: app, api salud y, a los 5 min, saturación. Cada uno dice qué parte falló.
+
+**Prueba realizada el 19/11 a las 07:36 AR:** un monitor apuntado a `/api/prueba-caida-vigia`, que no existe (404), sin tocar la app.
+- El incidente abrió al instante, confirmado desde Asia, Europa y Norteamérica.
+- Better Stack registró "Sent an email to juan cruz romero".
+- Después se apuntó el monitor a `/api/salud` y el incidente se resolvió solo, con la duración registrada. El monitor quedó pausado.
+
+### Lo que requiere a Gerencia
+
+1. **Conectar el latido.** En GitHub → Settings → Secrets and variables → Actions → *New repository secret*:
+   - nombre `VIGIA_LATIDO_URL`;
+   - valor: la URL del latido (Better Stack → Heartbeats → "Vigia de GitHub corre" → *Copy*).
+
+   Claude no puede cargar secretos de GitHub: el control de permisos lo bloquea. Hasta que se cargue, el latido queda "pendiente" y no avisa.
+2. **Sumar a Facundo.** Better Stack → *Invite colleagues*, con su email. Después, en *Escalation policies*: avisar a Juan Cruz y, si no lo reconoce en 10 min, a Facundo.
+3. **Avisos en el celular.** El push de Better Stack es de pago. En el plan gratis, activar en el celular la notificación de los emails de `betterstack.com`.
+
+## GitHub Actions: monitoreo complementario
+
+El vigía de GitHub queda como **segunda capa** con más detalle: CPU, Disk IO estimado, crons, fichajes, ingresos e historial en issues. **No se depende de su horario** para detectar caídas: eso lo hace Better Stack.
 
 ## Qué hacer cuando llega una alerta
 
