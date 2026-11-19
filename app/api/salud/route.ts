@@ -59,13 +59,22 @@ export async function GET() {
   if (base.ok && base.cuerpo) { try { datosBase = JSON.parse(base.cuerpo) } catch { /* se informa como falla */ } }
   const recursos = metricas.ok && metricas.cuerpo ? extraerMetricas(metricas.cuerpo) : null
 
+  // Sin clave de servicio (p. ej. en previews) no se puede medir la base desde
+  // acá: no es una caída. salud_ping del vigía sigue midiendo la base directo.
+  const sinClave = TIPO_CLAVE === 'falta'
   const resultado = evaluarSalud({
-    base: { ok: base.ok && !!datosBase, status: base.status, ms: base.ms, error: base.error },
+    base: sinClave
+      ? { ok: true, status: 0, ms: 0, error: 'sin_clave_servicio' }
+      : { ok: base.ok && !!datosBase, status: base.status, ms: base.ms, error: base.error },
     auth: { ok: auth.ok, status: auth.status, ms: auth.ms, error: auth.error },
     metricas: { ok: metricas.ok, status: metricas.status, ms: metricas.ms, error: metricas.error },
     datosBase,
     recursos,
   })
+  if (sinClave) {
+    resultado.alertas.push({ clave: 'configuracion', nivel: 'amarillo', texto: 'Falta SUPABASE_SERVICE_ROLE_KEY: no se miden recursos', valor: null })
+    if (resultado.estado === 'ok') resultado.estado = 'atencion'
+  }
 
   return NextResponse.json(
     { ...resultado, clave_servicio: TIPO_CLAVE, ms_total: Date.now() - t0, ts: new Date().toISOString() },
