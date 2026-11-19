@@ -38,6 +38,10 @@ export interface Recursos {
   disco_usado_pct: number | null
   /** Series que parecen saldo de IO/créditos (la Metrics API está en beta). */
   io_saldo: Record<string, number>
+  /** Sistemas de archivos vistos (punto de montaje, GB, % usado) — diagnóstico. */
+  discos: { mp: string; gb: number; pct: number }[]
+  /** Nombres de series de disco/IO publicadas (sin valores) — diagnóstico. */
+  series_io: string[]
   series: number
 }
 
@@ -101,15 +105,14 @@ export function extraerMetricas(texto: string): Recursos {
     }
   }
 
-  // Disco: el sistema de archivos más grande con datos completos (el de la base).
-  let discoPct: number | null = null
-  let mayor = 0
-  for (const v of Object.values(fs)) {
-    if (v.size && v.avail != null && v.size > mayor) {
-      mayor = v.size
-      discoPct = Math.round((1 - v.avail / v.size) * 1000) / 10
-    }
-  }
+  // Disco de la base: el montado en /data (Supabase). Si no aparece, no se
+  // adivina: el "más grande" puede ser el del sistema (falso aviso del 19/11).
+  const discos = Object.entries(fs)
+    .filter(([, v]) => v.size && v.avail != null)
+    .map(([mp, v]) => ({ mp, gb: Math.round((v.size! / 1073741824) * 10) / 10, pct: Math.round((1 - v.avail! / v.size!) * 1000) / 10 }))
+  const datos = discos.find(d => d.mp === '/data') ?? discos.find(d => d.mp.startsWith('/data'))
+  const discoPct = datos ? datos.pct : null
+  const seriesIo = Array.from(nombres).filter(n => /disk|ebs|iops|throughput|balance|budget|burst|credit/i.test(n)).sort()
 
   return {
     ram_total_mb: ramTotal != null ? Math.round(ramTotal / 1048576) : null,
@@ -121,6 +124,8 @@ export function extraerMetricas(texto: string): Recursos {
     disco_io_seg: suma.node_disk_io_time_seconds_total ?? null,
     disco_usado_pct: discoPct,
     io_saldo: ioSaldo,
+    discos,
+    series_io: seriesIo,
     series: nombres.size,
   }
 }
