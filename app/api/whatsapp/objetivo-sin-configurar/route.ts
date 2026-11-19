@@ -20,7 +20,7 @@ export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
 export const maxDuration = 60
 
-const ENVIO_HABILITADO = false as const
+const ENVIO_HABILITADO = true as const
 const ETAPA = 'wa_objetivo_sin_configurar'
 const PLANTILLA = process.env.WHATSAPP_PLANTILLA_OBJETIVO_SIN_CONFIGURAR || PLANTILLA_OBJETIVO_SIN_CONFIGURAR.nombre
 /** Desde cuándo rige el aviso: sólo objetivos creados después. Sin valor = no avisa. */

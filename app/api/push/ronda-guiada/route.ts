@@ -25,7 +25,7 @@ export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
 export const maxDuration = 60
 
-const HABILITADO = false as const
+const HABILITADO = true as const
 const ETAPA = 'wa_ronda_configurada_activa'
 const PLANTILLA = process.env.WHATSAPP_PLANTILLA_RONDA_CONFIGURADA || PLANTILLA_RONDA_CONFIGURADA.nombre
 const URL_APP = process.env.WHATSAPP_DEEPLINK_BASE || 'https://mercosur-seguridad.vercel.app/dashboard'
