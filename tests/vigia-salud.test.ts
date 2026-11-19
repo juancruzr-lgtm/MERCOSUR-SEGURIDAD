@@ -118,6 +118,12 @@ describe('vigía (GitHub Actions)', () => {
   it('Supabase sano desde GitHub pero la app no llega a la base (503) → api', () => {
     expect(problemasDe({ ...base, salud: { ok: false, status: 503, ms: 4000 } }).map((x: any) => x.clave)).toEqual(['api'])
   })
+  it('/api/salud 404 (todavía sin desplegar) no abre incidente', () => {
+    expect(problemasDe({ ...base, salud: { ok: false, status: 404, ms: 100 } })).toEqual([])
+  })
+  it('/api/salud 500/504 con la app arriba → api', () => {
+    expect(problemasDe({ ...base, salud: { ok: false, status: 504, ms: 15000 } }).map((x: any) => x.clave)).toEqual(['api'])
+  })
   it('errores 500/502/504 de la app → app caída', () => {
     for (const status of [500, 502, 503, 504]) {
       expect(problemasDe({ ...base, app: { ok: false, status, ms: 100 } })[0]).toMatchObject({ clave: 'app', nivel: 'rojo' })

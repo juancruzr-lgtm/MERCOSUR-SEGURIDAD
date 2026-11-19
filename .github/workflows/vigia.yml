@@ -58,7 +58,9 @@ jobs:
         env:
           APP_URL: https://mercosur-seguridad.vercel.app
           SUPABASE_URL: https://rngdjslzfcjtepgzmzrs.supabase.co
-          SUPABASE_ANON_KEY: ${{ secrets.VIGIA_SUPABASE_ANON_KEY }}
+          # Clave publishable de Supabase: pública por diseño (es la misma que
+          # usa el navegador). Sólo puede llamar salud_ping y auth/v1/health.
+          SUPABASE_ANON_KEY: ${{ secrets.VIGIA_SUPABASE_ANON_KEY || 'sb_publishable_2gE2JZXgImEmxnN_ImS61g_vHwyxckI' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ASIGNAR: ${{ vars.VIGIA_ASIGNAR || 'juancruzr-lgtm' }}
           MODO: ${{ github.event_name == 'schedule' && 'normal' || inputs.modo }}

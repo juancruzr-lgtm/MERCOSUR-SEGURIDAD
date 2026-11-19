@@ -83,7 +83,8 @@ export function problemasDe({ app, auth, ping, salud, saludJson, tasas }) {
   // /api/salud: un 503 con base/login caídos ya está cubierto arriba; cualquier
   // otra falla (500/502/504/timeout, o 503 con Supabase sano visto desde acá)
   // es la app que no llega a la base: lo que sufren los vigiladores.
-  const cubierto = salud.status === 503 && (!ping.ok || !auth.ok)
+  // Un 404 es "chequeo no desplegado" (p. ej. durante el despliegue), no caída.
+  const cubierto = (salud.status === 503 && (!ping.ok || !auth.ok)) || salud.status === 404
   if (!salud.ok && app.ok && !cubierto) {
     add('api', 'rojo', 'Las funciones de la app fallan', `/api/salud: ${describir(salud)}`)
   }
@@ -222,7 +223,9 @@ async function chequear(estado) {
     // /dashboard es lo que abre la app instalada (la raíz responde un 307 cacheado).
     medir(`${APP_URL}/dashboard`, {}, 15000),
     medir(`${SB_URL}/auth/v1/health`, { headers: { apikey: SB_ANON } }, 10000),
-    medir(`${SB_URL}/rest/v1/rpc/salud_ping`, { method: 'POST', headers: { apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}`, 'Content-Type': 'application/json' }, body: '{}' }, 10000),
+    // Clave publishable (sb_publishable_…): pública por diseño, va sólo en apikey.
+    // Una anon key vieja (JWT) también sirve y además se manda como Bearer.
+    medir(`${SB_URL}/rest/v1/rpc/salud_ping`, { method: 'POST', headers: { apikey: SB_ANON, ...(SB_ANON.startsWith('eyJ') ? { Authorization: `Bearer ${SB_ANON}` } : {}), 'Content-Type': 'application/json' }, body: '{}' }, 10000),
     medir(`${APP_URL}/api/salud`, {}, 15000),
   ])
   let saludJson = null
