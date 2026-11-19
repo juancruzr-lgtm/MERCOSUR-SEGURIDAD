@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parsearCoordenadasPegadas } from '@/lib/rondas'
+import { parsearCoordenadasPegadas } from '@/lib/coordenadas-mapa'
 
 // Cargar puntos desde la oficina en vez de ir hasta el portón: se pega el par
 // que devuelve cualquier mapa y se completan los dos campos que ya existían.

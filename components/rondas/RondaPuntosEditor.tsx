@@ -24,6 +24,7 @@ import type {
   DiagnosticoGpsPunto, NuevoRondaPunto, OrigenPosicion, PoliticaFoto, RondaPunto,
 } from '@/lib/rondas'
 import { capturarGpsNuevo, type CapturaGpsEnCurso } from '@/lib/gps-captura'
+import { supabase } from '@/lib/supabase'
 import type { ModoQr } from '@/lib/rondas-qr'
 import type { PuntoRondaMapa } from './RondaPuntosMap'
 import ReferenciaPuntoIA from '@/components/ia/ReferenciaPuntoIA'
@@ -196,6 +197,10 @@ export default function RondaPuntosEditor({
   const [error, setError] = useState('')
   const [gpsEstado, setGpsEstado] = useState('')
   const [capturandoGps, setCapturandoGps] = useState(false)
+  // Búsqueda: dirección, link de Google Maps o coordenadas.
+  const [busqueda, setBusqueda] = useState('')
+  const [buscando, setBuscando] = useState(false)
+  const [resultadosBusqueda, setResultadosBusqueda] = useState<{ lat: number; lng: number; etiqueta: string }[]>([])
 
   // Diagnóstico GPS por punto. Se recalcula cada vez que se recarga la lista.
   const [diagnosticos, setDiagnosticos] = useState<Record<string, DiagnosticoGpsPunto>>({})
@@ -312,6 +317,8 @@ export default function RondaPuntosEditor({
     setAjusteMapa(false)
     setError('')
     setGpsEstado('')
+    setBusqueda('')
+    setResultadosBusqueda([])
   }
 
   const abrirNuevo = () => {
@@ -349,29 +356,70 @@ export default function RondaPuntosEditor({
     setGpsEstado('')
   }
 
-  // Pegar "lat, lng" de una sola vez. Escribe en los MISMOS campos que la carga
-  // manual y deja el mismo origen_posicion: no es otro circuito, es otra forma
-  // de llenar el que ya existe. Sirve para cargar puntos desde la oficina, sin
-  // ir hasta el portón — que es lo que hace falta cuando una ronda quedó sin
-  // ningún punto cargado.
-  const pegarCoordenadas = (texto: string) => {
-    const coords = parsearCoordenadasPegadas(texto)
-    if (!coords) {
-      setError('No pude leer las coordenadas. Pegá latitud y longitud separadas por coma, por ejemplo: -32.9468, -60.6393')
-      return
-    }
+  // Cualquier forma de ubicar el punto sin estar en el lugar (coordenadas,
+  // link de Google Maps, dirección o toque en el mapa) escribe en los MISMOS
+  // campos que la carga manual, con origen_posicion 'manual'. No guarda solo.
+  const aplicarPosicionManual = (lat: number, lng: number, mensaje: string) => {
     limpiarWatch()
     setCapturandoGps(false)
     setForm(actual => ({
       ...actual,
-      latitud: coords.lat.toFixed(7),
-      longitud: coords.lng.toFixed(7),
+      latitud: lat.toFixed(7),
+      longitud: lng.toFixed(7),
       precision_metros: '',
       origen_posicion: 'manual',
       posicion_capturada_at: new Date().toISOString(),
     }))
-    setGpsEstado('')
+    setGpsEstado(mensaje)
     setError('')
+  }
+
+  const buscarUbicacion = async (texto: string) => {
+    const limpio = texto.trim()
+    if (!limpio || buscando) return
+    setResultadosBusqueda([])
+    setError('')
+
+    // Coordenadas directas (decimales o grados/min/seg): sin ir al servidor.
+    const coords = parsearCoordenadasPegadas(limpio)
+    if (coords) {
+      aplicarPosicionManual(coords.lat, coords.lng, 'Posición cargada desde coordenadas. Revisala en el mapa y guardá el punto.')
+      setBusqueda('')
+      return
+    }
+
+    setBuscando(true)
+    try {
+      const { data } = await supabase.auth.getSession()
+      const token = data.session?.access_token
+      if (!token) {
+        setError('La sesión expiró. Volvé a ingresar.')
+        return
+      }
+      const res = await fetch('/api/geo/ubicar', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texto: limpio }),
+      })
+      const json = await res.json().catch(() => null) as
+        { resultados?: { lat: number; lng: number; etiqueta: string }[]; error?: string } | null
+      const resultados = json?.resultados ?? []
+      if (!res.ok || resultados.length === 0) {
+        setError(json?.error ?? 'No se pudo ubicar ese texto.')
+        return
+      }
+      if (resultados.length === 1) {
+        const r = resultados[0]
+        aplicarPosicionManual(r.lat, r.lng, `${r.etiqueta}. Revisala en el mapa y guardá el punto.`)
+        setBusqueda('')
+      } else {
+        setResultadosBusqueda(resultados)
+      }
+    } catch {
+      setError('No se pudo conectar para buscar la ubicación.')
+    } finally {
+      setBuscando(false)
+    }
   }
 
   // Aplica la mejor lectura al formulario y avisa si el iPhone repitió una
@@ -464,17 +512,10 @@ export default function RondaPuntosEditor({
   }, [limpiarWatch, aplicarLecturaGps])
 
   const moverDesdeMapa = (latitud: number, longitud: number) => {
-    limpiarWatch()
-    setCapturandoGps(false)
-    setForm(actual => ({
-      ...actual,
-      latitud: latitud.toFixed(7),
-      longitud: longitud.toFixed(7),
-      precision_metros: '',
-      origen_posicion: 'manual',
-      posicion_capturada_at: new Date().toISOString(),
-    }))
-    setGpsEstado('Posición definida MANUALMENTE en el mapa (sin GPS). La precisión GPS fue eliminada.')
+    aplicarPosicionManual(
+      latitud, longitud,
+      'Posición definida MANUALMENTE en el mapa (sin GPS). La precisión GPS fue eliminada.',
+    )
   }
 
   const guardar = async () => {
@@ -611,6 +652,10 @@ export default function RondaPuntosEditor({
 
   const coordenadasEditadasCompletas =
     editandoId !== null && coordenadasFormulario(form) !== null
+  // Toque en el mapa ubica el punto: siempre si todavía no tiene posición, y
+  // con "Ajustar en mapa" activo si ya la tiene (evita moverlo sin querer).
+  const colocarEnMapa = editandoId !== null && !capturandoGps && !guardando
+    && (ajusteMapa || !coordenadasEditadasCompletas)
 
   return (
     <div className={styles.editor}>
@@ -739,43 +784,74 @@ export default function RondaPuntosEditor({
                           return siguiente
                         })
                       }}
-                      disabled={guardando || capturandoGps || !coordenadasEditadasCompletas}
+                      disabled={guardando || capturandoGps}
                     >
-                      {ajusteMapa ? 'Finalizar ajuste' : 'Ajustar en mapa'}
+                      {ajusteMapa ? 'Finalizar ajuste' : coordenadasEditadasCompletas ? 'Ajustar en mapa' : 'Marcar en mapa'}
                     </button>
                   </div>
                   {gpsEstado && <div className={styles.help}>{gpsEstado}</div>}
-                  {ajusteMapa && (
+                  {colocarEnMapa && (
                     <div className={styles.mapNotice}>
-                      La nueva posición se guardará al presionar Guardar punto.
+                      Tocá el mapa donde va el punto (o arrastrá el marcador). Se guarda al presionar Guardar punto.
                     </div>
                   )}
                 </div>
-                {/* Pegar el par de una vez, tal como sale de Google Maps.
-                    Llena los mismos campos de abajo; no guarda por su cuenta. */}
+                {/* Ubicar sin estar en el lugar: link de Google Maps (también
+                    los cortos de WhatsApp), dirección o coordenadas (decimales
+                    o grados/min/seg). Llena los campos de abajo; no guarda solo. */}
                 <div className={`${styles.field} ${styles.full}`}>
-                  <label htmlFor="ronda-punto-pegar">Pegar coordenadas</label>
-                  <input
-                    id="ronda-punto-pegar"
-                    placeholder="-32.9468, -60.6393"
-                    onPaste={evento => {
-                      const texto = evento.clipboardData.getData('text')
-                      if (parsearCoordenadasPegadas(texto)) {
+                  <label htmlFor="ronda-punto-buscar">Buscar ubicación</label>
+                  <div className={styles.gpsControls}>
+                    <input
+                      id="ronda-punto-buscar"
+                      style={{ flex: 1, minWidth: 0 }}
+                      placeholder={'Link de Maps, dirección o 30°56\'35.0"S 61°32\'28.1"W'}
+                      value={busqueda}
+                      onChange={evento => setBusqueda(evento.target.value)}
+                      onPaste={evento => {
+                        const texto = evento.clipboardData.getData('text')
+                        if (!texto.trim()) return
                         evento.preventDefault()
-                        pegarCoordenadas(texto)
-                        ;(evento.target as HTMLInputElement).value = ''
-                      }
-                    }}
-                    onKeyDown={evento => {
-                      if (evento.key !== 'Enter') return
-                      evento.preventDefault()
-                      pegarCoordenadas((evento.target as HTMLInputElement).value)
-                      ;(evento.target as HTMLInputElement).value = ''
-                    }}
-                  />
+                        setBusqueda(texto)
+                        void buscarUbicacion(texto)
+                      }}
+                      onKeyDown={evento => {
+                        if (evento.key !== 'Enter') return
+                        evento.preventDefault()
+                        void buscarUbicacion(busqueda)
+                      }}
+                    />
+                    <button
+                      className={styles.button}
+                      type="button"
+                      onClick={() => void buscarUbicacion(busqueda)}
+                      disabled={buscando || guardando || !busqueda.trim()}
+                    >
+                      {buscando ? 'Buscando…' : 'Buscar'}
+                    </button>
+                  </div>
+                  {resultadosBusqueda.length > 0 && (
+                    <div className={styles.list}>
+                      {resultadosBusqueda.map(r => (
+                        <button
+                          key={`${r.lat},${r.lng}`}
+                          className={styles.button}
+                          type="button"
+                          style={{ textAlign: 'left', whiteSpace: 'normal' }}
+                          onClick={() => {
+                            aplicarPosicionManual(r.lat, r.lng, `${r.etiqueta}. Revisala en el mapa y guardá el punto.`)
+                            setResultadosBusqueda([])
+                            setBusqueda('')
+                          }}
+                        >
+                          {r.etiqueta}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <div className={styles.help}>
-                    Pegá latitud y longitud separadas por coma y se completan los dos campos.
-                    O usá el botón de GPS para tomar la ubicación del dispositivo.
+                    Pegá el link que mandan por WhatsApp, las coordenadas (como las copia Google Maps)
+                    o escribí una dirección. También podés tocar el mapa o usar el GPS del dispositivo.
                   </div>
                 </div>
                 <div className={styles.field}>
@@ -862,6 +938,7 @@ export default function RondaPuntosEditor({
             puntos={puntosMapa}
             puntoSeleccionadoId={editandoId}
             ajusteHabilitado={ajusteMapa}
+            colocarHabilitado={colocarEnMapa}
             interaccionHabilitada={interaccionMapa}
             centroObjetivo={centroObjetivo}
             onSeleccionar={puntoId => {
