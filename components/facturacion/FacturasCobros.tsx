@@ -169,6 +169,12 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, alCambiar, alVerCli
   }, [f.comprobante_id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const saldo = Number(f.saldo_c)
+  // Pago cargado por error: se anula entero (revierte sus aplicaciones). Queda en el historial.
+  function anularPago(c: any) {
+    const m = prompt(`Anular el pago del ${fecha(c.fecha)} por ${pesos(c.importe_c)}${c.referencia ? ` (${c.referencia})` : ''}.\nLa factura vuelve a quedar con saldo. El registro queda en el historial.\n\nMotivo:`)
+    if (!m) return
+    correr(async () => { await rpc('fact_cobro_anular_completo', { p_id: c.id, p_motivo: m }); alCambiar() }, 'Pago anulado')
+  }
   return (
     <div style={{ background: '#0a0e1a', border: '1px solid #1e3a5f', borderRadius: 8, padding: 12, margin: '4px 0 10px' }}>
       <div style={S.fila}>
@@ -190,7 +196,8 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, alCambiar, alVerCli
           <h4 style={{ ...S.sub, marginTop: 8 }}>COBROS APLICADOS</h4>
           {aps.length ? aps.map(a => {
             const c = a.cobro_id ? cobroPorId.get(a.cobro_id) : null
-            return <div key={a.id}>{c ? `${fecha(c.fecha)} · ${c.medio}${c.cheque_numero ? ` n° ${c.cheque_numero}` : ''}${c.cheque_estado ? ` (${c.cheque_estado})` : ''}${c.referencia ? ` · ${c.referencia}` : ''}` : 'Retención'} · <b>{pesos(a.importe_c)}</b></div>
+            return <div key={a.id} style={{ ...S.fila, gap: 6 }}>{c ? `${fecha(c.fecha)} · ${c.medio}${c.cheque_numero ? ` n° ${c.cheque_numero}` : ''}${c.cheque_estado ? ` (${c.cheque_estado})` : ''}${c.referencia ? ` · ${c.referencia}` : ''}` : 'Retención'} · <b>{pesos(a.importe_c)}</b>
+              {c && <button style={{ ...S.btnPeligro, padding: '2px 8px' }} disabled={ocupado} onClick={() => anularPago(c)}>Anular pago</button>}</div>
           }) : <div style={S.sub}>Sin cobros registrados.</div>}
           <DetalleInteres comprobanteId={f.comprobante_id} i={interes} cargando={cargandoInteres} alCambiar={alCambiarInteres} />
           {hist.length > 0 && <details style={{ marginTop: 8 }}><summary style={S.sub}>Historial ({hist.length})</summary>

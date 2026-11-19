@@ -268,7 +268,12 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
           <h4 style={S.sub}>COBROS / ANTICIPOS / CHEQUES</h4>
           {d.cobros.map(c => <div key={c.id} style={{ ...S.fila, fontSize: 13, opacity: c.anulado_at ? 0.5 : 1, cursor: disponibleCobro(c) > 0 && !c.anulado_at ? 'pointer' : undefined, background: ap.origen === `cobro:${c.id}` ? '#1e3a5f' : undefined }}
             onClick={() => elegirCobro(c)} title={disponibleCobro(c) > 0 && !c.anulado_at ? 'Tocá para aplicarlo a la factura elegida' : undefined}>
-            {fecha(c.fecha)} · {c.medio} · {pesos(c.importe_c)} · aplicado {pesos(aplicado('cobro_id', c.id))}{c.es_anticipo ? ' · anticipo' : ''}{c.cheque_estado ? ` · cheque ${c.cheque_numero} ${c.cheque_estado}` : ''}
+            {fecha(c.fecha)} · {c.medio} · {pesos(c.importe_c)} · aplicado {pesos(aplicado('cobro_id', c.id))}{c.es_anticipo ? ' · anticipo' : ''}{c.cheque_estado ? ` · cheque ${c.cheque_numero} ${c.cheque_estado}` : ''}{c.referencia ? ` · ${c.referencia}` : ''}{c.anulado_at ? ` · anulado: ${c.anulado_motivo ?? ''}` : ''}
+            {!c.anulado_at && <button style={{ ...S.btnPeligro, padding: '2px 8px' }} disabled={ocupado} onClick={e => {
+              e.stopPropagation()
+              const m = prompt(`Anular el pago del ${fecha(c.fecha)} por ${pesos(c.importe_c)}.\nSe revierten sus aplicaciones y la factura vuelve a quedar con saldo. El registro queda en el historial.\n\nMotivo:`)
+              if (m) correr(async () => { await rpc('fact_cobro_anular_completo', { p_id: c.id, p_motivo: m }); await cargar() }, 'Pago anulado')
+            }}>Anular pago</button>}
             {c.cheque_estado && ({ en_cartera: ['depositado', 'endosado'], depositado: ['acreditado', 'rechazado'], rechazado: ['en_cartera', 'anulado'] } as Record<string, string[]>)[c.cheque_estado]?.map(x => (
               <button key={x} style={{ ...S.btn2, padding: '2px 6px' }} onClick={() => correr(async () => { await rpc('fact_cheque_estado', { p_cobro_id: c.id, p_estado: x, p_motivo: null }); await cargar() })}>{x}</button>
             ))}
