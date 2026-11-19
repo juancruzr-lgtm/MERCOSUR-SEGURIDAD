@@ -78,6 +78,8 @@ node_disk_io_time_seconds_total{device="nvme1n1"} 100
 node_filesystem_size_bytes{mountpoint="/data",fstype="ext4"} 2000000000
 node_filesystem_avail_bytes{mountpoint="/data",fstype="ext4"} 1100000000
 node_filesystem_size_bytes{mountpoint="/run",fstype="tmpfs"} 99999999999
+node_filesystem_size_bytes{mountpoint="/",fstype="ext4"} 9000000000
+node_filesystem_avail_bytes{mountpoint="/",fstype="ext4"} 2000000000
 ebs_io_balance_percent{volume="data"} 12
 `
   it('lee RAM, CPU, disco, ignora tmpfs y detecta series de saldo de IO', () => {
@@ -86,7 +88,10 @@ ebs_io_balance_percent{volume="data"} 12
     expect(r.ram_usada_pct).toBe(80)
     expect(r.cpu_total_seg).toBe(1000)
     expect(r.cpu_ocioso_seg).toBe(910)
+    // Usa /data (la base), no el disco del sistema "/" aunque sea más grande.
     expect(r.disco_usado_pct).toBe(45)
+    expect(r.discos.map(d => d.mp).sort()).toEqual(['/', '/data'])
+    expect(r.series_io).toContain('node_disk_read_bytes_total')
     expect(Object.values(r.io_saldo)).toEqual([12])
   })
   it('saldo de IO < 15 % → rojo en /api/salud', () => {
@@ -97,6 +102,7 @@ ebs_io_balance_percent{volume="data"} 12
   it('texto vacío o raro no rompe', () => {
     const r = extraerMetricas('basura\n{}\n')
     expect(r.ram_usada_pct).toBeNull()
+    expect(r.disco_usado_pct).toBeNull()
     expect(r.series).toBe(0)
   })
   it('umbrales documentados', () => {
