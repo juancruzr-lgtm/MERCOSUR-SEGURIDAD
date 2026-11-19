@@ -190,7 +190,7 @@ Procedimiento completo: docs/monitoreo/VIGIA.md`
 
 async function abrir(problema, estado) {
   const titulo = `${problema.nivel === 'rojo' ? '🔴' : '🟡'} [Vigía${PRUEBA ? ' · PRUEBA' : ''}] ${problema.texto}`
-  const cuerpo = `**${problema.nivel === 'rojo' ? 'Incidente' : 'Aviso preventivo'} detectado** el ${ahoraAR()} (hora Argentina).
+  const cuerpo = `${PRUEBA ? '> 🧪 **PRUEBA del sistema de avisos — no requiere ninguna acción.** La app funciona normalmente; este incidente es simulado y se cierra solo.\n\n' : ''}**${problema.nivel === 'rojo' ? 'Incidente' : 'Aviso preventivo'} detectado** el ${ahoraAR()} (hora Argentina).
 
 - Problema: ${problema.texto}
 - Detalle: ${problema.detalle || '—'}
@@ -202,7 +202,8 @@ ${PASOS}
   const issue = await gh('POST', '/issues', {
     title: titulo, body: cuerpo,
     labels: ['vigia', etiquetaDe(problema.clave), problema.nivel === 'rojo' ? 'vigia-rojo' : 'vigia-amarillo', ...(PRUEBA ? ['vigia-prueba'] : [])],
-    assignees: PRUEBA ? [] : ASIGNAR,
+    // En prueba no se asigna (no notifica), salvo que se pida probar el aviso real.
+    assignees: PRUEBA && E.ASIGNAR_PRUEBA !== 'si' ? [] : ASIGNAR,
   })
   if (issue) {
     console.log(`::error::ABIERTO #${issue.number}: ${problema.texto} (${problema.detalle})`)
@@ -306,6 +307,15 @@ async function main() {
 
   const inicio = Date.now()
   const filas = []
+
+  // Frecuencia real: minutos desde el último chequeo de la corrida anterior.
+  // GitHub agenda "cada 5 min" pero puede demorar o saltear corridas.
+  let hueco = null
+  if (!PRUEBA && estado.ultimoChequeo) {
+    hueco = Math.round((inicio - estado.ultimoChequeo) / 6000) / 10
+    estado.huecos = [...(estado.huecos ?? []), { ts: inicio, min: hueco }].slice(-300)
+    console.log(`HUECO: ${hueco} min sin chequear desde la corrida anterior`)
+  }
   for (let i = 0; i < ITERACIONES; i++) {
     const t0 = Date.now()
     try {
@@ -316,6 +326,7 @@ async function main() {
       console.log(`::warning::Chequeo ${i + 1} falló internamente: ${e?.message}`)
     }
     if (!PRUEBA) {
+      estado.ultimoChequeo = Date.now()
       fs.mkdirSync(path.dirname(ESTADO_PATH), { recursive: true })
       fs.writeFileSync(ESTADO_PATH, JSON.stringify(estado))
     }
@@ -326,7 +337,9 @@ async function main() {
 
   if (E.GITHUB_STEP_SUMMARY) {
     const cols = ['hora', 'app', 'login', 'base', 'salud', 'cpu', 'disco_ocupado', 'disco_mbs', 'iops', 'ram', 'problemas']
-    const md = [`### Vigía Mercosur ${PRUEBA ? '(prueba)' : ''}`, '', `| ${cols.join(' | ')} |`, `|${cols.map(() => '---').join('|')}|`,
+    const hs = (estado.huecos ?? []).filter(h => h.ts > Date.now() - 24 * 3600e3).map(h => h.min)
+    const frec = hueco == null ? '' : `Hueco desde la corrida anterior: **${hueco} min**. Últimas 24 h: ${hs.length} corridas, hueco medio ${hs.length ? (hs.reduce((a, b) => a + b, 0) / hs.length).toFixed(1) : '—'} min, máximo ${hs.length ? Math.max(...hs) : '—'} min.`
+    const md = [`### Vigía Mercosur ${PRUEBA ? '(prueba)' : ''}`, '', frec, '', `| ${cols.join(' | ')} |`, `|${cols.map(() => '---').join('|')}|`,
       ...filas.map(f => `| ${cols.map(c => f[c]).join(' | ')} |`)].join('\n')
     fs.appendFileSync(E.GITHUB_STEP_SUMMARY, md + '\n')
   }
