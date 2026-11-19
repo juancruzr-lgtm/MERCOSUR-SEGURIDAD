@@ -23,6 +23,11 @@ on:
         default: 'ninguno'
         type: choice
         options: [ninguno, caida_app, recuperacion]
+      asignar:
+        description: 'Sólo en prueba: si = asignar el incidente de prueba a Gerencia (prueba el aviso real)'
+        default: 'no'
+        type: choice
+        options: ['no', 'si']
 
 permissions:
   contents: read
@@ -65,6 +70,7 @@ jobs:
           ASIGNAR: ${{ vars.VIGIA_ASIGNAR || 'juancruzr-lgtm' }}
           MODO: ${{ github.event_name == 'schedule' && 'normal' || inputs.modo }}
           SIMULAR: ${{ github.event_name == 'schedule' && 'ninguno' || inputs.simular }}
+          ASIGNAR_PRUEBA: ${{ github.event_name == 'schedule' && 'no' || inputs.asignar }}
           # WhatsApp opcional: queda inactivo hasta cargar estos secretos (ver doc).
           WHATSAPP_TOKEN: ${{ secrets.VIGIA_WHATSAPP_TOKEN }}
           WHATSAPP_PHONE_ID: ${{ secrets.VIGIA_WHATSAPP_PHONE_ID }}
