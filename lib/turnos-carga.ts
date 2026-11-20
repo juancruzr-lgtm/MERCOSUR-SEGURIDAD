@@ -36,6 +36,24 @@ export function ventanaTurnosPantalla(hoy: string): { desde: string; hastaExclus
   }
 }
 
+/**
+ * Columnas de turnos que usa el estado compartido del panel admin (Turnos,
+ * Dashboard, Objetivos, Asistencia, Revisión, Reportes, GPS, cobertura,
+ * programación y publicación). Antes era `select('*')` (27 columnas, ~630 ms
+ * por pedido): se dejan afuera los textos libres y la auditoría que ninguna
+ * de esas pantallas lee — observacion, observacion_guardia,
+ * observacion_supervisor, motivo_reemplazo, origen, estado_revision,
+ * editado_por y updated_at. El detalle de un turno sigue pidiendo `*`.
+ *
+ * Si una pantalla empieza a leer otra columna del turno del estado global,
+ * hay que agregarla acá (tests/turnos-carga.test.ts fija la lista).
+ */
+// Un solo literal (sin `.join` ni `+`): supabase-js tipa el resultado a
+// partir del texto del select; con un `string` cualquiera lo marca como error.
+export const SELECT_TURNO_PANTALLA = 'id, guardia_id, guardia_original_id, guardia_real_id, objetivo_id, puesto_id, servicio_base_id, reemplaza_turno_id, fecha, hora_inicio, hora_fin, estado, tipo_evento, created_at, revisado_por, revisado_at, publicado, publicado_at, publicado_por'
+
+export const COLUMNAS_TURNO_PANTALLA: readonly string[] = SELECT_TURNO_PANTALLA.split(', ')
+
 /** Forma mínima del cliente que usa la carga (supabase-js la cumple). */
 type ClienteTurnos = { from: (tabla: 'turnos') => any }
 
@@ -52,7 +70,7 @@ export function cargarTurnosVentana<T = any>(
   return fetchPaginadoResult<T>((d, h) =>
     cliente
       .from('turnos')
-      .select('*')
+      .select(SELECT_TURNO_PANTALLA)
       .gte('fecha', desde)
       .lt('fecha', hastaExclusivo)
       .order('fecha', { ascending: false })

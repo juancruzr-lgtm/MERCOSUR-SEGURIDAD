@@ -12,7 +12,7 @@ import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
 import { construirResumenGuardiaVigiladores, plantillaLiquidacionResumenGuardia, grupoDeResumen, type GrupoResumen } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
-import { cargarTurnosVentana, ventanaTurnosPantalla } from '@/lib/turnos-carga'
+import { SELECT_TURNO_PANTALLA, cargarTurnosVentana, ventanaTurnosPantalla } from '@/lib/turnos-carga'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
   construirRevisionPorClave, esPendienteDeAccion, estadoRevision,
@@ -102,7 +102,7 @@ import {
 } from '@/lib/periodo-argentina'
 import {
   PRIMER_PERIODO_SUPERVISIONES, SELECT_SUPERVISION_DETALLE, cargarSupervisionesDelPeriodo,
-  cargarTurnosDelPeriodo, supervisionesDelDia, supervisionesDelPeriodo, unirPorId,
+  cargarTurnosDelPeriodo, supervisionesDelDia, supervisionesDelPeriodo, supervisionesMesDesdeDetalle, unirPorId,
 } from '@/lib/supervisiones-periodo'
 import { etiquetaMes as etiquetaMesLargo } from '@/lib/desempeno-datos'
 import {
@@ -14273,7 +14273,7 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
     const desdeStr = sumarDiasFecha(`${mesActual}-01`, -1)
     const hastaISO = new Date(Date.UTC(fdY, fdM, 1, 3, 0, 0)).toISOString()
     const hastaStr = hastaISO.slice(0, 10)
-    const [g, o, t, r, n, cp, ci, s, sm, su, z, sz] = await Promise.all([
+    const [g, o, t, r, n, cp, ci, s, su, z, sz] = await Promise.all([
       // Sin cuenta_bancaria (económico): se carga aparte sólo si puedeEconomico.
       supabase.from('usuarios').select('id, nombre, apellido, dni, telefono, legajo, rol, estado, foto_url, auth_user_id, created_at, email, cuil, legajo_visual, es_prueba, puesto_organizacional').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
@@ -14281,7 +14281,7 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
       // PostgREST devuelve como máximo, y el recorte es silencioso. Sin paginar,
       // `order('fecha', desc)` dejaba afuera los primeros días del mes.
       fetchPaginadoResult<Turno>((desde, hasta) =>
-        supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false }).order('id').range(desde, hasta),
+        supabase.from('turnos').select(SELECT_TURNO_PANTALLA).gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false }).order('id').range(desde, hasta),
       ),
       // El filtro va por la fecha del turno, no por `created_at` del registro:
       // una cobertura precargada o una regularización posterior pertenecen al
@@ -14314,16 +14314,6 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(desde, hasta)),
-      // Paginado: el 20/11/2026 el mes ya iba por 517 visitas; a fin de mes
-      // se acerca al tope silencioso de 1000 de PostgREST.
-      fetchPaginadoResult<SupervisionRankingAdmin>((desde, hasta) => supabase
-        .from('supervisiones')
-        .select('id, objetivo_id, supervisor_id, estado, created_at')
-        .gte('created_at', inicioMes)
-        .lt('created_at', inicioMesSiguiente)
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
-        .range(desde, hasta)),
       // Última supervisión por objetivo. El .limit(5000) no servía: PostgREST
       // corta en 1000 igual, sin avisar, y con 1.253 supervisiones se perdían
       // 253 — objetivos que figuraban "sin supervisar nunca" por truncamiento.
@@ -14362,6 +14352,23 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
     if (n.data) setNovedades(n.data)
     if (cp.data) setChecklistPlantillas(cp.data)
     if (ci.data) setChecklistItems(ci.data)
+    // Supervisiones del mes (ranking): subconjunto exacto de la carga de
+    // detalle (mes anterior + actual, paginada, mismo orden), así que se
+    // deriva en el cliente en vez de pedir otra vez la tabla. Si el detalle
+    // falló, se cae a la consulta propia de antes: el ranking del mes no
+    // depende de que cargue el detalle (comportamiento previo).
+    const sm: { data: SupervisionRankingAdmin[] | null; error: any } = !s.error
+      ? { data: supervisionesMesDesdeDetalle(s.data as SupervisionAdmin[], inicioMes, inicioMesSiguiente) as SupervisionRankingAdmin[], error: null }
+      // Paginado: el 20/11/2026 el mes ya iba por 517 visitas; a fin de mes
+      // se acerca al tope silencioso de 1000 de PostgREST.
+      : await fetchPaginadoResult<SupervisionRankingAdmin>((desde, hasta) => supabase
+        .from('supervisiones')
+        .select('id, objetivo_id, supervisor_id, estado, created_at')
+        .gte('created_at', inicioMes)
+        .lt('created_at', inicioMesSiguiente)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(desde, hasta))
     // Supervisiones: un error no es "no hubo visitas". Se guarda y se muestra.
     const fallasSupervisiones = [
       s.error && `detalle: ${s.error.message ?? s.error}`,
