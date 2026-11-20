@@ -4,7 +4,7 @@
 // registrar el pago ahí mismo. Sólo lee; registrar el pago usa las mismas funciones que la cuenta corriente.
 // Intereses por mora: informativos, para avisarle al cliente (lib/facturacion/intereses-cobranzas); a la fecha si
 // la factura sigue impaga, con los días cerrados el día del pago si ya se cobró. Se pueden marcar "no cobrar".
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { api, leer, rpc } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { ETIQUETA_ESTADO, conVencimiento, detalleVencimiento, estadoCobro, vencimientoDe, type CondicionesPago, type EstadoCobro } from '@/lib/facturacion/estado-cobro'
@@ -167,6 +167,8 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, reclamos, otrasImpa
   const [comp, setComp] = useState<any>(null)
   const [notas, setNotas] = useState<any[]>([])
   const [hist, setHist] = useState<any[]>([])
+  // Id del cobro generado en la pantalla: si el alta se reintenta, el servidor devuelve el mismo cobro.
+  const idPago = useRef(crypto.randomUUID())
   const [pago, setPago] = useState({ fecha: fechaArgentina(), importe: importeTexto(Math.max(0, Number(f.saldo_c))), medio: 'transferencia', referencia: `Pago ${f.nv}`, cheque_numero: '', cheque_banco: '', cheque_fecha_pago: '' })
   const { ocupado, correr, Mensaje } = useAccion()
 
@@ -234,8 +236,9 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, reclamos, otrasImpa
             <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
               const importe = centavosDe(pago.importe)
               if (!pago.fecha || !importe || importe <= 0) throw new Error('Completá la fecha y el importe cobrado')
-              const id = await rpc('fact_cobro_registrar', { p_datos: { ...pago, cliente_id: f.cliente_id, importe_c: importe } })
+              const id = await rpc('fact_cobro_registrar', { p_datos: { ...pago, id: idPago.current, cliente_id: f.cliente_id, importe_c: importe } })
               await rpc('fact_aplicar', { p_origen_tipo: 'cobro', p_origen_id: id, p_comprobante_id: f.comprobante_id, p_saldo_inicial_id: null, p_importe_c: Math.min(importe, saldo), p_evidencia: { manual: true, desde: 'facturas y cobros' } })
+              idPago.current = crypto.randomUUID(); setPago(p => ({ ...p, importe: '', referencia: '' }))
               alCambiar()
             }, 'Pago registrado y aplicado')}>Registrar pago</button>
           </div>

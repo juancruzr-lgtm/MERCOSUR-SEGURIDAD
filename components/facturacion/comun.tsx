@@ -1,7 +1,7 @@
 'use client'
 // Estilos y piezas chicas compartidas por las pantallas de Facturación
 // (mismo lenguaje visual que Liquidación).
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { formatoPesos } from '@/lib/facturacion/dinero'
 import { fechaCompleta } from '@/lib/facturacion/fecha-campo'
 
@@ -66,9 +66,13 @@ export const COLOR_ESTADO: Record<string, string> = {
 export function useAccion() {
   const [ocupado, setOcupado] = useState(false)
   const [msg, setMsg] = useState<{ tipo: 'ok' | 'err'; texto: string } | null>(null)
+  // Candado sincrónico: `ocupado` deshabilita el botón recién en el próximo render, y un doble clic
+  // llegaba a disparar la acción dos veces (cobros duplicados).
+  const enCurso = useRef(false)
   async function correr(fn: () => Promise<unknown>, exito?: string) {
-    setOcupado(true); setMsg(null)
-    try { await fn(); if (exito) setMsg({ tipo: 'ok', texto: exito }) } catch (e: any) { setMsg({ tipo: 'err', texto: e?.message ?? String(e) }) } finally { setOcupado(false) }
+    if (enCurso.current) return
+    enCurso.current = true; setOcupado(true); setMsg(null)
+    try { await fn(); if (exito) setMsg({ tipo: 'ok', texto: exito }) } catch (e: any) { setMsg({ tipo: 'err', texto: e?.message ?? String(e) }) } finally { enCurso.current = false; setOcupado(false) }
   }
   const Mensaje = () => (msg ? <div style={msg.tipo === 'ok' ? S.ok : S.err}>{msg.texto}</div> : null)
   return { ocupado, correr, Mensaje, setMsg }

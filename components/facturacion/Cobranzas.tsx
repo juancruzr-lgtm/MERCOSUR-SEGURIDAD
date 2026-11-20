@@ -147,6 +147,8 @@ function Conciliacion({ clientes }: { clientes: any[] }) {
 function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombreCliente: string }) {
   const [d, setD] = useState<{ saldos: any[]; cobros: any[]; rets: any[]; aps: any[]; si: any[]; cond: CondicionesPago | null }>({ saldos: [], cobros: [], rets: [], aps: [], si: [], cond: null })
   const primeraCarga = useRef(true)
+  // Id del cobro generado en la pantalla: si el alta se reintenta, el servidor devuelve el mismo cobro.
+  const idCobro = useRef(crypto.randomUUID())
   const [cobro, setCobro] = useState({ fecha: '', importe: '', medio: 'transferencia', referencia: '', es_anticipo: false, cheque_numero: '', cheque_banco: '', cheque_fecha_pago: '' })
   const [ret, setRet] = useState({ impuesto: 'ganancias', certificado: '', fecha: '', importe: '', orden_pago: '', estado: 'certificado_recibido' })
   const [ap, setAp] = useState({ origen: '', destino: '', importe: '' })
@@ -290,12 +292,14 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
             <input style={S.input} placeholder="Referencia" value={cobro.referencia} onChange={e => setCobro({ ...cobro, referencia: e.target.value })} />
             <label style={S.sub}><input type="checkbox" checked={cobro.es_anticipo} onChange={e => setCobro({ ...cobro, es_anticipo: e.target.checked })} /> anticipo</label>
             <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
-              await rpc('fact_cobro_registrar', { p_datos: { ...cobro, cliente_id: clienteId, importe_c: centavosDe(cobro.importe) } }); await cargar()
+              await rpc('fact_cobro_registrar', { p_datos: { ...cobro, id: idCobro.current, cliente_id: clienteId, importe_c: centavosDe(cobro.importe) } })
+              idCobro.current = crypto.randomUUID(); setCobro(c => ({ ...c, importe: '', referencia: '', cheque_numero: '', cheque_banco: '', cheque_fecha_pago: '' })); await cargar()
             }, 'Cobro registrado (sin aplicar)')}>Registrar cobro</button>
             {facSel && <button style={S.btn} disabled={ocupado} onClick={() => correr(async () => {
               const importe = centavosDe(cobro.importe)
               if (!cobro.fecha || !importe || importe <= 0) throw new Error('Completá la fecha y el importe del cobro')
-              const id = await rpc('fact_cobro_registrar', { p_datos: { ...cobro, cliente_id: clienteId, importe_c: importe } })
+              const id = await rpc('fact_cobro_registrar', { p_datos: { ...cobro, id: idCobro.current, cliente_id: clienteId, importe_c: importe } })
+              idCobro.current = crypto.randomUUID()
               // Se aplica hasta el saldo de la factura; si el cobro es mayor, el resto queda disponible.
               await aplicar(`cobro:${id}`, `c:${facSel.comprobante_id}`, Math.min(importe, Number(facSel.saldo_c)))
               setCobro(c => ({ ...c, importe: '', referencia: '', cheque_numero: '', cheque_banco: '', cheque_fecha_pago: '' })); setSelFac(null); setAp({ origen: '', destino: '', importe: '' }); await cargar()
