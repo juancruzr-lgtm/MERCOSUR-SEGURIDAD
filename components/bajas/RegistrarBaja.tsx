@@ -16,7 +16,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { cargarDatosIdentidad } from '@/lib/usuarios-columnas'
+import { cargarDatosPersonales } from '@/lib/usuarios-columnas'
 import {
   accesoDeEmpleado, adjuntarDocumento, anularBaja, anularVacaciones, bajasDeEmpleado, cargarCausas, cargarTiposDocumentoBaja,
   confirmarBaja, documentosDeBaja, estadoLiquidacionDeBaja, guardarBorrador, historialDeBaja, leerDocumentoConIA,
@@ -48,7 +48,7 @@ async function identificacion(empleadoId: string): Promise<IdentificacionEmplead
   const [{ data: u }, { data: l }, ident] = await Promise.all([
     supabase.from('usuarios').select('id, nombre, apellido, legajo, legajo_visual, estado').eq('id', empleadoId).maybeSingle(),
     supabase.from('legajo_datos_personales').select('fecha_ingreso').eq('empleado_id', empleadoId).maybeSingle(),
-    cargarDatosIdentidad(supabase, [empleadoId]),
+    cargarDatosPersonales(supabase, [empleadoId]),
   ])
   if (!u) return null
   const x = u as any

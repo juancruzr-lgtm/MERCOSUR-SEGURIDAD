@@ -165,7 +165,7 @@ import { gestionaDatosSensibles } from '@/lib/legajo'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
 import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
-import { COLUMNAS_USUARIO, cargarCuentasBancarias, cargarDatosIdentidad, conIdentidad } from '@/lib/usuarios-columnas'
+import { COLUMNAS_USUARIO, cargarCuentasBancarias, cargarDatosPersonales, conDatosPersonales } from '@/lib/usuarios-columnas'
 import { fusionarFila, fusionarLista, cambiosDeFormulario } from '@/lib/usuarios-edicion'
 import { leerSeccionDeUrl } from '@/lib/navegacion-seccion-url'
 import SeccionEnUrl from '@/components/navegacion/SeccionEnUrl'
@@ -1659,9 +1659,9 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     try {
       const { data } = await supabase.from('usuarios').select(COLUMNAS_USUARIO).eq('id', g.id).maybeSingle()
       if (data) fila = fusionarFila(g as any, data as any) as Usuario
-      // DNI/CUIL por RPC con permiso (F-06); sin permiso la fila queda como estaba.
-      const ident = await cargarDatosIdentidad(supabase, [g.id])
-      if (!ident.error) fila = conIdentidad([fila], ident.porId)[0]
+      // DNI/teléfono/CUIL por RPC con permiso (F-06); lo que no llega queda como estaba.
+      const ident = await cargarDatosPersonales(supabase, [g.id])
+      if (!ident.error) fila = conDatosPersonales([fila], ident.porId)[0]
       if (puedeEconomicoForm) {
         const { porId, error } = await cargarCuentasBancarias(supabase)
         if (!error) fila = { ...fila, cuenta_bancaria: porId.get(g.id) ?? null } as Usuario
@@ -1765,8 +1765,8 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         if (entId) {
           const { data: nuevo } = await supabase.from('usuarios').select(COLUMNAS_USUARIO).eq('id', entId).single()
           if (nuevo) {
-            const ident = await cargarDatosIdentidad(supabase, [entId])
-            setGuardias((prev: any[]) => [...prev, conIdentidad([nuevo as any], ident.porId)[0]])
+            const ident = await cargarDatosPersonales(supabase, [entId])
+            setGuardias((prev: any[]) => [...prev, conDatosPersonales([nuevo as any], ident.porId)[0]])
           }
         }
         setModal(false)
@@ -10607,8 +10607,8 @@ function SolicitudesAdmin({ user, guardias, setGuardias, objetivos, setObjetivos
         if (solicitud.tipo === 'crear_vigilador' && resuelta?.entidad_id) {
           const { data: nuevo } = await supabase.from('usuarios').select(COLUMNAS_USUARIO).eq('id', resuelta.entidad_id).single()
           if (nuevo) {
-            const ident = await cargarDatosIdentidad(supabase, [resuelta.entidad_id])
-            setGuardias((prev: Usuario[]) => [...prev, conIdentidad([nuevo as any], ident.porId)[0] as Usuario])
+            const ident = await cargarDatosPersonales(supabase, [resuelta.entidad_id])
+            setGuardias((prev: Usuario[]) => [...prev, conDatosPersonales([nuevo as any], ident.porId)[0] as Usuario])
           }
         } else if (solicitud.tipo === 'baja_vigilador' && resuelta?.entidad_id) {
           setGuardias((prev: Usuario[]) => prev.map(g => g.id === resuelta.entidad_id ? { ...g, estado: 'inactivo' } : g))
@@ -14290,8 +14290,8 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
     const hastaStr = hastaISO.slice(0, 10)
     const [g, o, t, r, n, cp, ci, s, su, z, sz] = await Promise.all([
       // Sin cuenta_bancaria (económico): se carga aparte sólo si puedeEconomico.
-      // Sin dni/cuil: se piden aparte por usuarios_datos_identidad (F-06).
-      supabase.from('usuarios').select('id, nombre, apellido, telefono, legajo, rol, estado, foto_url, auth_user_id, created_at, email, legajo_visual, es_prueba, puesto_organizacional').order('apellido'),
+      // Sin dni/telefono/cuil: se piden aparte por usuarios_datos_personales (F-06).
+      supabase.from('usuarios').select('id, nombre, apellido, legajo, rol, estado, foto_url, auth_user_id, created_at, email, legajo_visual, es_prueba, puesto_organizacional').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
       // Turnos y asistencia del mes se paginan: superan las 1000 filas que
       // PostgREST devuelve como máximo, y el recorte es silencioso. Sin paginar,
@@ -14352,11 +14352,11 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
     ])
     if (g.data) {
       let filas = g.data as any[]
-      // DNI y CUIL por RPC con permiso (F-06): Administración/Gerencia reciben los
-      // de todas las personas; otro perfil, sólo los propios.
-      const ident = await cargarDatosIdentidad(supabase)
-      if (ident.error) console.error('DNI/CUIL:', ident.error)
-      else filas = conIdentidad(filas, ident.porId)
+      // DNI, teléfono y CUIL por RPC con permiso (F-06): la base entrega sólo lo
+      // que esta sesión puede ver (el CUIL, sólo a Administración/Gerencia).
+      const ident = await cargarDatosPersonales(supabase)
+      if (ident.error) console.error('Datos personales:', ident.error)
+      else filas = conDatosPersonales(filas, ident.porId)
       // Merge de cuenta_bancaria SÓLO para capacidad económica (gerencia).
       if (puedeEconomico) {
         // Por RPC con gate en la base (Administración/Gerencia): la columna ya no

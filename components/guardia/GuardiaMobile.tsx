@@ -662,6 +662,10 @@ export default function GuardiaMobile({ user }: { user: any }) {
   // un flujo crítico en curso (fichaje: `ingresoFase`/`fichando`), para no
   // interrumpirlo; al terminar, vuelve a exigirse (ver el render).
   const [telValido, setTelValido] = useState<boolean>(() => {
+    // El teléfono propio llega por usuarios_datos_personales (F-06, AppShell). Si
+    // la clave no está, no se pudo consultar: no se sabe, y no se exige (la
+    // compuerta vuelve a evaluarse en el próximo ingreso).
+    if (user?.telefono === undefined) return true
     try { return Boolean(normalizarTelefonoAr(user.telefono).e164) } catch { return true }
   })
   const [telModalAbierto, setTelModalAbierto] = useState(false)

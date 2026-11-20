@@ -27,7 +27,7 @@ import { shellDeUsuario } from '@/lib/capacidades'
 import { supabase } from '@/lib/supabase'
 import { limpiarRecuperacionPendiente, recuperacionPendientePara, tomarErrorEnlace } from '@/lib/auth-recuperacion'
 import { consultarCambioPassword } from '@/lib/acceso-password-dni'
-import { COLUMNAS_USUARIO, conIdentidadPropia } from '@/lib/usuarios-columnas'
+import { COLUMNAS_USUARIO, conDatosPersonalesPropios } from '@/lib/usuarios-columnas'
 import { MENSAJES_SESION, verificarSesion } from '@/lib/sesion-perfil'
 import { recargarSiHayVersionNueva } from '@/lib/version-app'
 import NuevaPassword from '@/components/auth/NuevaPassword'
@@ -62,7 +62,7 @@ export default function AppShell() {
   const entrar = useCallback(async (perfilBase: any) => {
     // DNI/CUIL propios por RPC (F-06): el perfil ya no los trae. Los usan el cambio
     // de contraseña = DNI (abajo) y la app del vigilador. Si la RPC falla, se entra igual.
-    const perfil = await conIdentidadPropia(supabase, await resolverDelegacionGerencia(perfilBase))
+    const perfil = await conDatosPersonalesPropios(supabase, await resolverDelegacionGerencia(perfilBase))
     // Cuenta marcada con cambio obligatorio y contraseña = DNI (lo decide la base,
     // lib/acceso-password-dni.ts): la estructura la elige ANTES de entrar al panel.
     // El vigilador, dentro de su app (GuardiaMobile), nunca durante un fichaje.

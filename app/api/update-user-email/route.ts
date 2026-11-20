@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { tieneCapacidad } from '@/lib/capacidades'
-import { getSupabaseAdmin, normalizeEmail, resolverPerfil } from '../_lib/employee-auth'
+import { getBearerToken, getSupabaseAdmin, normalizeEmail, resolverPerfil } from '../_lib/employee-auth'
+import { recortarParaLaSesion } from '../_lib/datos-personales-respuesta'
 import { verificarDestino } from '../_lib/destino-usuario'
 
 export async function POST(req: NextRequest) {
@@ -47,7 +48,9 @@ export async function POST(req: NextRequest) {
 
     if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 })
 
-    return NextResponse.json({ ok: true, user: actualizado, message: 'Email sincronizado correctamente' })
+    // DNI/teléfono/CUIL: sólo lo que la sesión puede ver según la base (F-06).
+    const [visible] = await recortarParaLaSesion(getBearerToken(req), [actualizado])
+    return NextResponse.json({ ok: true, user: visible, message: 'Email sincronizado correctamente' })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Error interno del servidor'
     return NextResponse.json({ error: message }, { status: 500 })

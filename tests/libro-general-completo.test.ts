@@ -260,9 +260,9 @@ describe('Libro general = Excel completo de cada mes', () => {
 
   it('sin la función de destinatarios (migración sin aplicar) las pendientes avisan NO DISPONIBLE', async () => {
     const c: any = fakeClient(tablasBase())
-    // Sólo falta esa función; el resto (p. ej. usuarios_datos_identidad, F-06) responde.
+    // Sólo falta esa función; el resto (p. ej. usuarios_datos_personales, F-06) responde.
     const rpcBase = c.rpc
-    c.rpc = (fn: string, args: any) => fn === 'usuarios_datos_identidad' ? rpcBase(fn, args)
+    c.rpc = (fn: string, args: any) => fn === 'usuarios_datos_personales' ? rpcBase(fn, args)
       : Promise.resolve({ data: null, error: { message: 'function pagos_banco_destinatarios does not exist' } })
     const ws = (await cargar((await generarLibroGeneralTrabajo(c)).buf!)).getWorksheet('2026-08')!
     expect(columna(ws, 'EXTRAS PENDIENTES DE PAGO').total).toBe('NO DISPONIBLE')

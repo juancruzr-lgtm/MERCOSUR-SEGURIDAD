@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
+import { getBearerToken, getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
+import { recortarParaLaSesion } from '../_lib/datos-personales-respuesta'
 import { tieneCapacidad, esGerenciaReal } from '@/lib/capacidades'
 import { afipConfigDesdeEnv } from '@/lib/afip/config'
 import { corroborarEmpleado, esperarConTope } from '@/lib/afip/corroborar'
@@ -134,14 +135,16 @@ export async function POST(req: NextRequest) {
     })
     if (!decision.ok) return NextResponse.json({ error: decision.error ?? 'No autorizado' }, { status: 403 })
 
-    const { data, error: dbError } = await admin.client
+    const { data: insertado, error: dbError } = await admin.client
       .from('usuarios')
       .insert(payload)
       .select()
       .single()
 
     if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
-    if (data?.id && String(data.cuil ?? '').replace(/\D/g, '').length === 11) await corroborarAlAlta(admin.client, data.id, perfil.id)
+    if (insertado?.id && String(insertado.cuil ?? '').replace(/\D/g, '').length === 11) await corroborarAlAlta(admin.client, insertado.id, perfil.id)
+    // DNI/teléfono/CUIL: sólo lo que la sesión puede ver según la base (F-06).
+    const [data] = await recortarParaLaSesion(getBearerToken(req), [insertado])
     // El CBU sólo vuelve a quien tiene capacidad económica (auditoría 05/11, V2).
     return NextResponse.json({ ok: true, usuario: puedeEconomico ? data : sinCuentaBancaria(data) })
   } catch (err) {
@@ -196,9 +199,11 @@ export async function PATCH(req: NextRequest) {
     const consulta = Object.keys(payload).length === 0
       ? admin.client.from('usuarios').select().eq('id', usuarioId).single()
       : admin.client.from('usuarios').update(payload).eq('id', usuarioId).select().single()
-    const { data, error: dbError } = await consulta
+    const { data: fila, error: dbError } = await consulta
 
     if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
+    // DNI/teléfono/CUIL: sólo lo que la sesión puede ver según la base (F-06).
+    const [data] = await recortarParaLaSesion(getBearerToken(req), [fila])
     // El CBU sólo vuelve a quien tiene capacidad económica (auditoría 05/11, V2).
     return NextResponse.json({ ok: true, usuario: puedeEconomico ? data : sinCuentaBancaria(data), campos_protegidos: protegidos })
   } catch (err) {

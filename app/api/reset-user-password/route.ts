@@ -10,7 +10,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { tieneCapacidad } from '@/lib/capacidades'
 import { repairEmployeeAuthUser } from '../_lib/auth-repair'
-import { getSupabaseAdmin, normalizeDni, normalizeEmail, resolverPerfil } from '../_lib/employee-auth'
+import { getBearerToken, getSupabaseAdmin, normalizeDni, normalizeEmail, resolverPerfil } from '../_lib/employee-auth'
+import { recortarParaLaSesion } from '../_lib/datos-personales-respuesta'
 import { marcarCambioObligatorio } from '../_lib/acceso-password'
 import { verificarDestino } from '../_lib/destino-usuario'
 
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       action: resultado.action,
-      user: resultado.user,
+      user: (await recortarParaLaSesion(getBearerToken(req), [resultado.user]))[0], // DNI/teléfono/CUIL: sólo lo que la sesión puede ver según la base (F-06).
       message: m.ok
         ? 'Contraseña restablecida: ingresa con su DNI y en ese momento tiene que elegir una nueva.'
         : 'Contraseña restablecida al DNI, pero no se pudo marcar el cambio obligatorio. Avisale que la cambie desde su perfil.',

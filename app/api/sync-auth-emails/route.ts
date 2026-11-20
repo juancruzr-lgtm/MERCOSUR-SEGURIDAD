@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getSupabaseAdmin, nombreEmpleado, normalizeEmail, requireCapacidad, type UsuarioEmpleado } from '../_lib/employee-auth'
+import { getBearerToken, getSupabaseAdmin, nombreEmpleado, normalizeEmail, requireCapacidad, type UsuarioEmpleado } from '../_lib/employee-auth'
+import { recortarParaLaSesion } from '../_lib/datos-personales-respuesta'
 
 // Copia a usuarios.email el email de Auth cuando difieren. Se dispara SÓLO desde el botón
 // «Sincronizar emails Auth» de Guardias (antes corría al abrir la pantalla: F-14).
@@ -103,7 +104,7 @@ export async function POST(req: NextRequest) {
       errores: errores.length,
     },
     errores,
-    users: actualizados,
+    users: await recortarParaLaSesion(getBearerToken(req), actualizados), // DNI/teléfono/CUIL: sólo lo que la sesión puede ver según la base (F-06).
     message: `Emails Auth sincronizados: ${sincronizados}. Sin Auth: ${sinAuth}. Errores: ${errores.length}.`,
   })
 }

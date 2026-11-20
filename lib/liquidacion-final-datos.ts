@@ -12,7 +12,7 @@ import {
   type OrdinariosHastaBaja, type ReglaCausal, type ResultadoLiquidacionFinal,
 } from '@/lib/liquidacion-final'
 import { cargarParametrosDelMes, plantillaTrabajoDelMes } from '@/lib/excel-trabajo-liquidacion'
-import { cargarDatosIdentidad, conIdentidad } from '@/lib/usuarios-columnas'
+import { cargarDatosPersonales, conDatosPersonales } from '@/lib/usuarios-columnas'
 import { parsearPlanillaVisual, type CeldaVisual } from '@/lib/liquidacion-visual'
 import { construirLineasVisual, type ConceptoCfg, type ExpedienteLinea, type FilaVisual, type PermanenteLinea } from '@/lib/visual-export'
 import { diferenciasDeHoja, leerHojasLiquidacionFinal, type DiferenciasHoja } from '@/lib/liquidacion-final-lote'
@@ -118,9 +118,9 @@ async function persona(client: any, baja: BajaFila): Promise<Persona> {
     // CUIL por RPC con permiso (F-06), no por la tabla. Si falta, se toma del padrón (abajo).
     const [{ data: fila }, ident] = await Promise.all([
       client.from('usuarios').select('id, nombre, apellido, legajo_visual').eq('id', baja.empleado_id).maybeSingle(),
-      cargarDatosIdentidad(client, [baja.empleado_id]),
+      cargarDatosPersonales(client, [baja.empleado_id]),
     ])
-    const u = fila ? conIdentidad([{ ...fila, id: baja.empleado_id }], ident.porId)[0] : null
+    const u = fila ? conDatosPersonales([{ ...fila, id: baja.empleado_id }], ident.porId)[0] : null
     if (u) {
       cuil = cuil ?? digitos(u.cuil)
       nombre = `${u.apellido ?? ''} ${u.nombre ?? ''}`.trim() || nombre

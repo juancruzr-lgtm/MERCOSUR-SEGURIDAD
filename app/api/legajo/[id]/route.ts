@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { gestionaLegajos, puedeVerLegajo } from '@/lib/legajo'
+import { visiblesDeLaSesion } from '../../_lib/datos-personales-respuesta'
 import { tieneCapacidad } from '@/lib/capacidades'
 import { rangoTurno, esTurnoNocturno } from '@/lib/turnos'
 
@@ -181,13 +182,18 @@ export async function GET(
 
   const novedadVigente = novedades?.[0] ?? null
 
+  // DNI y CUIL según la regla de la base para la sesión que llama (F-06):
+  // CUIL sólo propio o Administración/Gerencia/delegación; DNI además exige,
+  // como hasta ahora, que gestione legajos. Si la consulta falla, no se envían.
+  const visibles = (await visiblesDeLaSesion(token, [empleadoId])).get(empleadoId)
+
   return NextResponse.json({
     empleado: {
       id: empleado.id,
       nombre: empleado.nombre,
       apellido: empleado.apellido,
       legajo: empleado.legajo,
-      cuil: empleado.cuil ?? null,
+      cuil: visibles?.has('cuil') ? (empleado.cuil ?? null) : undefined,
       // Quien llega acá es admin o el propio empleado (puedeVerLegajo):
       // el empleado ve su cuenta, no la edita.
       legajo_visual: empleado.legajo_visual ?? null,
@@ -197,7 +203,7 @@ export async function GET(
       cuenta_bancaria: (tieneCapacidad(solicitante, 'ver_finanzas') || solicitante.id === empleadoId)
         ? (empleado.cuenta_bancaria ?? null)
         : undefined,
-      dni: gestionaLegajos(solicitante) ? empleado.dni : undefined,
+      dni: gestionaLegajos(solicitante) && visibles?.has('dni') ? empleado.dni : undefined,
       email: gestionaLegajos(solicitante) ? empleado.email : undefined,
       rol: empleado.rol,
       estado: empleado.estado,
