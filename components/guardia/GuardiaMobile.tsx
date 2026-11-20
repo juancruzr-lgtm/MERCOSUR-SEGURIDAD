@@ -1338,7 +1338,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
         screen: 'ingreso_flow',
         turno_id: ingresoTurno.id,
         duration_ms: Date.now() - reintentoDesde,
-        value_json: { intento_id: intentoId, resultado: r2.ok ? 'ok' : r2.reason },
+        value_json: { intento_id: intentoId, resultado: r2.ok ? 'ok' : ('reason' in r2 ? r2.reason : 'sin_lectura') },
       })
     }
     const auditoria  = calcularAuditoriaRadioGps(gpsIngreso, objetivo)
