@@ -11,7 +11,8 @@
  * volumen sino que está mandando lo que no sirve, y eso sólo se ve cruzando
  * contra lo que decidió un humano.
  *
- * Cuenta con `head: true`: nueve consultas de conteo, ninguna fila viaja.
+ * Los nueve números salen de una sola función (ia_control_imagenes_conteos):
+ * una pasada sobre la tabla y el permiso aplicado por objetivo, no por fila.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -52,41 +53,27 @@ export default function ControlImagenesIAPanel({ onVerTodas }: { onVerTodas?: ()
 
   const cargar = useCallback(async () => {
     setCargando(true); setError(null)
-    // `head: true` pide sólo el contador: no transfiere filas.
-    const contar = async (aplicar: (q: any) => any) => {
-      const { count, error: e } = await aplicar(
-        supabase.from('evidencia_analisis').select('id', { count: 'exact', head: true }),
-      )
-      if (e) throw e
-      return count ?? 0
-    }
-    const completado = (q: any) => q.eq('estado', 'completado')
-    // Regla vigente de la bandeja: todo lo que no es SIN_OBSERVACIONES, más la
-    // muestra de control que entra a propósito para poder detectar falsos
-    // negativos. Es la misma condición que aplica AnalisisIAPanel.
-    const enBandeja = (q: any) =>
-      completado(q).or('clasificacion_efectiva.neq.SIN_OBSERVACIONES,en_muestra_control.is.true')
-    const observacion = (q: any) =>
-      completado(q).neq('clasificacion_efectiva', 'SIN_OBSERVACIONES')
-
+    // Una sola llamada: la base cuenta todo en una pasada y aplica el permiso
+    // una vez por objetivo. Antes eran 9 conteos sobre todo el histórico con
+    // la RLS evaluada fila por fila (~125.000 evaluaciones por apertura del
+    // Dashboard); fue la mayor carga de disco en la caída del 18/11/2026.
+    // Misma regla de bandeja que AnalisisIAPanel: lo que no es
+    // SIN_OBSERVACIONES, más la muestra de control.
     try {
-      const [
-        analizadas, ok, dudosas, aRevision, confirmadas, descartadas,
-        observRevisadas, observDescartadas, revisadas,
-      ] = await Promise.all([
-        contar(completado),
-        contar(q => completado(q).eq('clasificacion_efectiva', 'SIN_OBSERVACIONES')),
-        contar(q => completado(q).eq('clasificacion_efectiva', 'EVIDENCIA_INSUFICIENTE')),
-        contar(enBandeja),
-        contar(q => completado(q).eq('revision_estado', 'INCORRECTO')),
-        contar(q => completado(q).eq('revision_estado', 'CORRECTO')),
-        contar(q => observacion(q).neq('revision_estado', 'PENDIENTE')),
-        contar(q => observacion(q).eq('revision_estado', 'CORRECTO')),
-        contar(q => completado(q).neq('revision_estado', 'PENDIENTE')),
-      ])
+      const { data, error: e } = await supabase.rpc('ia_control_imagenes_conteos')
+      if (e) throw e
+      const r = (Array.isArray(data) ? data[0] : data) ?? {}
+      const n = (v: unknown) => Number(v ?? 0) || 0
       setC({
-        analizadas, ok, dudosas, aRevision, confirmadas, descartadas,
-        observRevisadas, observDescartadas, revisadas,
+        analizadas: n(r.analizadas),
+        ok: n(r.ok),
+        dudosas: n(r.dudosas),
+        aRevision: n(r.a_revision),
+        confirmadas: n(r.confirmadas),
+        descartadas: n(r.descartadas),
+        observRevisadas: n(r.observ_revisadas),
+        observDescartadas: n(r.observ_descartadas),
+        revisadas: n(r.revisadas),
       })
     } catch (e: any) {
       setError(e?.message ?? 'No se pudieron cargar las métricas de IA.')

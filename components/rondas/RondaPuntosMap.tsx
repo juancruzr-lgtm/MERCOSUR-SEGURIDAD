@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect } from 'react'
 import L from 'leaflet'
-import { Circle, MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet'
+import { Circle, LayersControl, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet'
 import type { OrigenPosicion } from '@/lib/rondas'
 import styles from './Rondas.module.css'
 
@@ -20,6 +20,8 @@ interface Props {
   puntos: PuntoRondaMapa[]
   puntoSeleccionadoId: string | null
   ajusteHabilitado: boolean
+  /** Un toque/click en el mapa ubica el punto que se está editando. */
+  colocarHabilitado?: boolean
   interaccionHabilitada: boolean
   centroObjetivo?: [number, number] | null
   onSeleccionar: (puntoId: string) => void
@@ -53,6 +55,17 @@ function iconoPunto(punto: PuntoRondaMapa, seleccionado: boolean): L.DivIcon {
   })
 }
 
+// Sin objetivo ni puntos con coordenadas: igual se muestra el mapa (vista de
+// Argentina) para poder buscar/tocar y ubicar el primer punto.
+const CENTRO_POR_DEFECTO: [number, number] = [-34.6, -63.6]
+
+function ColocarConClick({ onColocar }: { onColocar: (lat: number, lng: number) => void }) {
+  useMapEvents({
+    click: evento => onColocar(evento.latlng.lat, evento.latlng.lng),
+  })
+  return null
+}
+
 function ControlVista({
   posiciones,
   seleccionado,
@@ -65,13 +78,19 @@ function ControlVista({
   estructuraKey: string
 }) {
   const map = useMap()
+  const seleccionadoKey = seleccionado ? `${seleccionado[0]},${seleccionado[1]}` : ''
 
   useEffect(() => {
     map.invalidateSize()
     if (seleccionado) {
-      map.setView(seleccionado, Math.max(map.getZoom(), 17))
+      // Si el punto ya está a la vista (p. ej. recién tocado en el mapa) no se
+      // mueve la cámara; si vino de una búsqueda, se centra en él.
+      const visible = map.getBounds().pad(-0.1).contains(seleccionado)
+      if (!visible || map.getZoom() < 15) {
+        map.setView(seleccionado, Math.max(map.getZoom(), 17))
+      }
     }
-  }, [map, seleccionadoId])
+  }, [map, seleccionadoId, seleccionadoKey])
 
   useEffect(() => {
     map.invalidateSize()
@@ -92,6 +111,7 @@ export default function RondaPuntosMap({
   puntos,
   puntoSeleccionadoId,
   ajusteHabilitado,
+  colocarHabilitado = false,
   interaccionHabilitada,
   centroObjetivo,
   onSeleccionar,
@@ -107,14 +127,7 @@ export default function RondaPuntosMap({
     : posicionados.length > 0
       ? [posicionados[0].latitud, posicionados[0].longitud] as [number, number]
       : centroObjetivo ?? null
-
-  if (!centro) {
-    return (
-      <div className={styles.mapEmpty}>
-        El mapa estará disponible cuando el objetivo o al menos un punto tenga coordenadas.
-      </div>
-    )
-  }
+  const zoomInicial = centro ? 17 : 5
 
   const posiciones = posicionados.map(
     punto => [punto.latitud, punto.longitud] as [number, number],
@@ -123,9 +136,10 @@ export default function RondaPuntosMap({
   return (
     <div className={styles.mapFrame}>
       <MapContainer
-        center={centro}
-        zoom={17}
+        center={centro ?? CENTRO_POR_DEFECTO}
+        zoom={zoomInicial}
         className={styles.mapCanvas}
+        style={colocarHabilitado && interaccionHabilitada ? { cursor: 'crosshair' } : undefined}
         dragging={interaccionHabilitada}
         touchZoom={interaccionHabilitada}
         doubleClickZoom={interaccionHabilitada}
@@ -133,10 +147,22 @@ export default function RondaPuntosMap({
         boxZoom={interaccionHabilitada}
         keyboard={interaccionHabilitada}
       >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+        <LayersControl position="topright">
+          <LayersControl.BaseLayer checked name="Mapa">
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+          </LayersControl.BaseLayer>
+          <LayersControl.BaseLayer name="Satélite">
+            <TileLayer
+              attribution="Imágenes &copy; Esri"
+              url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+              maxZoom={19}
+            />
+          </LayersControl.BaseLayer>
+        </LayersControl>
+        {colocarHabilitado && interaccionHabilitada && <ColocarConClick onColocar={onMover} />}
         <ControlVista
           posiciones={posiciones}
           seleccionado={seleccionado

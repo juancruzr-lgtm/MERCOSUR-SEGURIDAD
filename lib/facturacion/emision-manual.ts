@@ -13,6 +13,7 @@
 import { TIPOS_COMPROBANTE, cuitValido, limpiarCuit } from './comprobantes'
 import { formatoPesos } from './dinero'
 import { alicuotaDe } from './emision-servidor'
+import { vtoPagoAlEmitir } from './vto-arca'
 
 export type PrefacturaAprobada = {
   tipo_comprobante: number | null; cuit_receptor: string | null; periodo_desde: string; periodo_hasta_excl: string
@@ -29,8 +30,12 @@ function menosUnDia(iso: string): string {
   const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10)
 }
 
-/** Pasos y valores tal como se cargan en Comprobantes en línea. */
-export function datosComprobantesEnLinea(p: PrefacturaAprobada, cliente: { razon_social: string; condicion_iva: string | null }, puntoVenta: number | null) {
+/**
+ * Pasos y valores tal como se cargan en Comprobantes en línea. Con `vto` (fecha de emisión y plazo vigente del
+ * contrato), el vencimiento de pago es emisión + plazo, igual que la emisión por la app; sin él, el de la prefactura.
+ */
+export function datosComprobantesEnLinea(p: PrefacturaAprobada, cliente: { razon_social: string; condicion_iva: string | null }, puntoVenta: number | null,
+  vto?: { fechaEmision: string; plazoDias?: number | string | null }) {
   const t = p.tipo_comprobante ? TIPOS_COMPROBANTE[p.tipo_comprobante] : null
   const esA = t?.letra === 'A'
   const pct = alicuotaDe(Number(p.neto_c), Number(p.iva_c))
@@ -39,7 +44,7 @@ export function datosComprobantesEnLinea(p: PrefacturaAprobada, cliente: { razon
     { paso: '1. Punto de venta y tipo', campo: 'Tipo de comprobante', valor: t?.nombre ?? '— sin definir —' },
     { paso: '2. Datos de emisión', campo: 'Conceptos a incluir', valor: 'Servicios' },
     { paso: '2. Datos de emisión', campo: 'Período facturado', valor: `${dmy(p.periodo_desde)} a ${dmy(menosUnDia(p.periodo_hasta_excl))}` },
-    { paso: '2. Datos de emisión', campo: 'Vto. para el pago', valor: dmy(p.fecha_vencimiento) || '— definir —' },
+    { paso: '2. Datos de emisión', campo: 'Vto. para el pago', valor: (vto ? dmy(vtoPagoAlEmitir(vto.fechaEmision, vto.plazoDias)) : dmy(p.fecha_vencimiento)) || '— definir —' },
     { paso: '3. Receptor', campo: 'Condición frente al IVA', valor: CONDICION[cliente.condicion_iva ?? ''] ?? '— sin cargar —' },
     { paso: '3. Receptor', campo: 'CUIT', valor: limpiarCuit(p.cuit_receptor) },
     { paso: '3. Receptor', campo: 'Razón social', valor: cliente.razon_social },

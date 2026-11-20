@@ -111,7 +111,7 @@ describe('contraseña inicial = DNI con cambio obligatorio', () => {
     expect(g).toMatch(/passModalAbierto && !passPausado && !telModalAbierto && ingresoFase === 'idle' && fichando === null/)
     expect(g).toMatch(/textoCancelar="Primero tengo que fichar"/)
     // Al terminar el fichaje, el aviso vuelve.
-    expect(g).toMatch(/if \(fichajeEnCursoRef\.current && !enCurso\) setPassPausado\(false\)/)
+    expect(g).toMatch(/if \(fichajeEnCursoRef\.current && !enCurso\) \{ setPassPausado\(false\); setLegajoPausado\(false\) \}/)
   })
 
   it('la estructura lo hace antes de entrar al panel; si la consulta falla no se bloquea', () => {

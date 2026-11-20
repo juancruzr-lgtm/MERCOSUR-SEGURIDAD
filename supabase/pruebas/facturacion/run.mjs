@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const { PGlite } = await import(process.env.PGLITE ? pathToFileURL(process.env.PGLITE).href : '@electric-sql/pglite')
 const REPO = process.argv[2] ?? fileURLToPath(new URL('../../..', import.meta.url))
-const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes', '20261210100000_facturacion_vto_enviado_a_arca', '20261210110000_facturacion_plazo_pago_30_por_defecto', '20261212100000_facturacion_conciliacion_externa']
+const MIGS = ['20261201120000_facturacion_base', '20261201130000_facturacion_comprobantes_arca', '20261201140000_facturacion_cuentas_corrientes', '20261201150000_facturacion_vencimientos_intereses', '20261202120000_facturacion_grupos_factura', '20261203130000_facturacion_reagrupar_atomico', '20261204120000_facturacion_seguro_periodo', '20261206120000_facturacion_arca_ambientes', '20261210100000_facturacion_vto_enviado_a_arca', '20261210110000_facturacion_plazo_pago_30_por_defecto', '20261212100000_facturacion_conciliacion_externa', '20261214110000_cobranzas_intereses_informativos']
 const db = new PGlite()
 const resultados = []
 const ok = (nombre, cond, extra = '') => { resultados.push([cond ? 'OK ' : 'FALLA', nombre, extra]) }
@@ -835,6 +835,64 @@ await db.exec(readFileSync(`${REPO}/supabase/migrations/20261210110000_facturaci
   ok('excepción de duplicado: la de Gerencia queda en el historial', !!(await uno(`select 1 x from public.fact_historial where entidad_id = $1 and accion = 'excepcion_duplicado'`, [pAgo])))
   ok('conciliar: anon no ejecuta las funciones nuevas', (await uno(`select bool_or(has_function_privilege('anon', p.oid, 'execute')) x from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public' and p.proname in ('fact_prefactura_conciliar', 'fact_conciliacion_diferencia', 'fact_excepcion_duplicado')`)).x === false)
+}
+
+// ── 20261214110000: intereses informativos (tasa general, tasa por contrato, "no cobrar") ─────────────────────
+{
+  const cfg = (await uno(`select valor from public.fact_config where clave = 'intereses'`))?.valor
+  ok('intereses: la tasa general arranca en BADLAR × 1', cfg?.tipo === 'badlar' && Number(cfg?.factor) === 1, JSON.stringify(cfg))
+  ok('intereses: Administración no cambia la tasa general', await falla(() => como(ADM, () => sql(`select public.fact_intereses_config_guardar('{"tipo":"badlar","factor":1.5}'::jsonb)`)), /Sólo Gerencia/))
+  await como(GER, () => sql(`select public.fact_intereses_config_guardar('{"tipo":"badlar","factor":1.5}'::jsonb)`))
+  ok('intereses: Gerencia cambia el factor de la BADLAR', Number((await uno(`select valor->>'factor' f from public.fact_config where clave = 'intereses'`)).f) === 1.5)
+  ok('intereses: factor fuera de rango no se acepta', await falla(() => como(GER, () => sql(`select public.fact_intereses_config_guardar('{"tipo":"badlar","factor":0}'::jsonb)`)), /factor/))
+  ok('intereses: tasa fija sin período no se acepta', await falla(() => como(GER, () => sql(`select public.fact_intereses_config_guardar('{"tipo":"fija","tasa":3}'::jsonb)`)), /período/))
+  ok('intereses: el cambio de la tasa general queda en el historial', !!(await uno(`select 1 x from public.fact_historial where entidad = 'config' and accion = 'intereses'`)))
+
+  const k = (await uno(`select id from public.fact_contratos order by created_at limit 1`)).id
+  const tasaK = () => uno(`select mora_tasa_tipo t, mora_tasa_factor f, mora_tasa m, mora_tasa_periodo p from public.fact_contratos where id = $1`, [k])
+  await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"mora_tasa_tipo":"tim"}'::jsonb)`, [k]))
+  ok('intereses: el contrato guarda su propia tasa (TIM)', (await tasaK()).t === 'tim')
+  await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"mora_tasa_tipo":"badlar","mora_tasa_factor":"1.2"}'::jsonb)`, [k]))
+  const kb = await tasaK()
+  ok('intereses: BADLAR × factor propio del contrato', kb.t === 'badlar' && Number(kb.f) === 1.2, JSON.stringify(kb))
+  ok('intereses: un tipo de tasa inválido no se acepta', await falla(() => como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"mora_tasa_tipo":"otra"}'::jsonb)`, [k]))))
+  ok('intereses: tasa fija sin tasa no se acepta', await falla(() => como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"mora_tasa_tipo":"fija","mora_tasa":""}'::jsonb)`, [k]))))
+  await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"mora_tasa_tipo":"fija","mora_tasa":"3","mora_tasa_periodo":"mensual","mora_metodo":"simple"}'::jsonb)`, [k]))
+  const kf = await tasaK()
+  ok('intereses: tasa fija pactada (3 % mensual)', kf.t === 'fija' && Number(kf.m) === 3 && kf.p === 'mensual', JSON.stringify(kf))
+  await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"mora_tasa_tipo":""}'::jsonb)`, [k]))
+  ok('intereses: vacío = vuelve a la tasa general', (await tasaK()).t === null)
+  ok('intereses: el cambio del contrato queda en el historial con la tasa anterior',
+    !!(await uno(`select 1 x from public.fact_historial where entidad_id = $1 and accion = 'condiciones_comerciales' and datos->'anteriores' ? 'mora_tasa_tipo'`, [k])))
+
+  const comp = (await uno(`select id from public.fact_comprobantes where ambiente = 'produccion' and tipo in (1, 6, 201) order by created_at limit 1`)).id
+  const marca = () => uno(`select interes_no_cobrar n, interes_no_cobrar_motivo m from public.fact_comprobante_seguimiento where comprobante_id = $1`, [comp])
+  ok('no cobrar: un supervisor no puede', await falla(() => como(SUP, () => sql(`select public.fact_interes_no_cobrar($1, true, 'Acordado con el cliente')`, [comp])), /Gerencia o Administración/))
+  ok('no cobrar: sin motivo no', await falla(() => como(ADM, () => sql(`select public.fact_interes_no_cobrar($1, true, '')`, [comp])), /por qué/))
+  await como(ADM, () => sql(`select public.fact_interes_no_cobrar($1, true, 'Cliente estratégico, acordado con Gerencia')`, [comp]))
+  const m1 = await marca()
+  ok('no cobrar: queda marcada con su motivo', m1.n === true && m1.m === 'Cliente estratégico, acordado con Gerencia', JSON.stringify(m1))
+  await como(ADM, () => sql(`select public.fact_interes_no_cobrar($1, false, null)`, [comp]))
+  const m2 = await marca()
+  ok('no cobrar: se puede volver a cobrar', m2.n === false && m2.m === null, JSON.stringify(m2))
+  ok('no cobrar: las dos marcas quedan en el historial',
+    Number((await uno(`select count(*)::int n from public.fact_historial where entidad_id = $1 and accion in ('interes_no_cobrar', 'interes_cobrar')`, [comp])).n) === 2)
+  ok('intereses: anon no ejecuta las funciones nuevas', (await uno(`select bool_or(has_function_privilege('anon', p.oid, 'execute')) x from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname in ('fact_intereses_config_guardar', 'fact_interes_no_cobrar', 'fact_contrato_condiciones_guardar')`)).x === false)
+
+  // Rollback sólo de esta migración: quita lo nuevo, las condiciones se siguen guardando con la versión anterior y se puede reaplicar.
+  await db.exec(readFileSync(`${REPO}/supabase/rollback/20261214110000_cobranzas_intereses_informativos_rollback.sql`, 'utf8'))
+  const q = `select (select count(*)::int from information_schema.columns where table_schema = 'public' and ((table_name = 'fact_contratos' and column_name in ('mora_tasa_tipo', 'mora_tasa_factor'))
+      or (table_name = 'fact_comprobante_seguimiento' and column_name like 'interes_no_cobrar%'))) cols,
+    (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in ('fact_intereses_config_guardar', 'fact_interes_no_cobrar')) fns,
+    (select count(*)::int from public.fact_config where clave = 'intereses') cfg`
+  const tras = await uno(q)
+  ok('intereses: el rollback quita columnas, funciones y la tasa general', tras.cols === 0 && tras.fns === 0 && tras.cfg === 0, JSON.stringify(tras))
+  await como(ADM, () => sql(`select public.fact_contrato_condiciones_guardar($1, '{"dias_vencimiento":"45"}'::jsonb)`, [k]))
+  ok('intereses: tras el rollback las condiciones se siguen guardando', Number((await uno(`select dias_vencimiento d from public.fact_contratos where id = $1`, [k])).d) === 45)
+  await db.exec(readFileSync(`${REPO}/supabase/migrations/20261214110000_cobranzas_intereses_informativos.sql`, 'utf8'))
+  const otra = await uno(q)
+  ok('intereses: la migración se puede volver a aplicar', otra.cols === 6 && otra.fns === 2 && otra.cfg === 1, JSON.stringify(otra))
 }
 
 // ── Rollback ───────────────────────────────────────────────────────────────

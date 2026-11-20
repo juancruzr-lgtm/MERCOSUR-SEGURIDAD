@@ -7,6 +7,7 @@ import { cuitValido } from '@/lib/facturacion/comprobantes'
 import { PLAZO_PAGO_POR_DEFECTO } from '@/lib/facturacion/vto-arca'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { DiagnosticoArca } from './DiagnosticoArca'
+import Licitaciones from './Licitaciones'
 import { CONDICIONES_IVA, CondicionesContrato, DatosEmisor, DatosFiscalesCliente, resumenCondiciones } from './Condiciones'
 
 const CONTRATO_VACIO = {
@@ -15,6 +16,7 @@ const CONTRATO_VACIO = {
   franja_nocturna_desde: '', franja_nocturna_hasta: '', dias_vencimiento: String(PLAZO_PAGO_POR_DEFECTO), requisitos: [] as string[], canal_entrega: 'email',
   envio_conjunto_planilla: false, requiere_portal: false, tipo_comprobante: '', pendientes: '', vigencia_desde: '', vigencia_hasta: '', estado: 'borrador', notas: '',
 }
+
 
 export default function Maestros() {
   const [clientes, setClientes] = useState<any[]>([])
@@ -42,6 +44,7 @@ export default function Maestros() {
     <div>
       <DatosEmisor />
       <DiagnosticoArca />
+      <Licitaciones />
       {sinContrato.length > 0 && <div style={{ ...S.card, borderColor: '#78350f' }}>
         <h3 style={{ ...S.h3, color: '#fbbf24' }}>Objetivos sin contrato ({sinContrato.length})</h3>
         <div style={S.sub}>Están activos pero Facturación no los ve: no entran en ninguna prefactura. Los objetivos nuevos se vinculan solos cuando el cliente tiene un único contrato vigente; éstos no se pudieron decidir. Abrí el cliente y usá «Vincular objetivo» en su contrato.</div>
