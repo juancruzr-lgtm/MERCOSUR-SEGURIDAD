@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- SIN APLICAR · requiere aprobación expresa de Gerencia
+-- Aplicada en producción el 19/11/2026 con autorización de Gerencia
 -- Alta automática de protocolos y rondas (diseño aprobado el 19/11/2026).
 -- (lib/configuracion-guiada.ts · docs/gestion-empresarial/configuracion-guiada.md)
 --
@@ -317,11 +317,15 @@ begin
   end if;
   perform pg_advisory_xact_lock(hashtext('protocolo:' || p_objetivo_id::text));
   v_numero := coalesce((select max(v.numero) from public.protocolo_versiones v where v.objetivo_id = p_objetivo_id and v.puesto_id is null), 0) + 1;
+  -- Producción exige que toda versión nazca como borrador (trg_protocolo_version_proteger):
+  -- se crea en borrador y se pasa a pendiente de aprobación en la misma transacción.
   insert into public.protocolo_versiones (objetivo_id, puesto_id, numero, titulo, texto, texto_sha256, fuente_tipo, fuente_descripcion,
-    asociacion, asociacion_confirmada_por, asociacion_confirmada_at, estado, enviado_aprobacion_por, enviado_aprobacion_at, creado_por)
+    asociacion, asociacion_confirmada_por, asociacion_confirmada_at, estado, creado_por)
   values (p_objetivo_id, null, v_numero, btrim(p_titulo), p_texto, repeat('0', 64), 'manual', 'Formulario guiado del supervisor de zona',
-    'confirmada', v_yo, now(), 'pendiente_aprobacion', v_yo, now(), v_yo)
+    'confirmada', v_yo, now(), 'borrador', v_yo)
   returning id into v_id;
+  update public.protocolo_versiones set estado = 'pendiente_aprobacion', enviado_aprobacion_por = v_yo, enviado_aprobacion_at = now()
+  where id = v_id;
   return jsonb_build_object('ok', true, 'id', v_id, 'numero', v_numero);
 end $$;
 

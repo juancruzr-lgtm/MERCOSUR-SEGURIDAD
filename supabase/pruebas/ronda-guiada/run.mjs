@@ -52,6 +52,9 @@ create table public.ronda_puntos (
   created_at timestamptz default now(), updated_at timestamptz default now(), origen_posicion text check (origen_posicion in ('gps','manual')),
   politica_foto text not null check (politica_foto in ('obligatoria','opcional','solo_novedad')), posicion_capturada_at timestamptz,
   check ((not gps_requerido) or (latitud is not null and longitud is not null and radio_metros is not null)), unique (ronda_base_id, orden));
+create function public.pv_nace_borrador() returns trigger language plpgsql as $$ begin
+  if new.estado <> 'borrador' then raise exception 'Una version de protocolo nace como borrador'; end if; return new; end $$;
+create trigger t_pv_borrador before insert on public.protocolo_versiones for each row execute function public.pv_nace_borrador();
 create function public.politica_foto() returns trigger language plpgsql as $$ begin
   if tg_op = 'INSERT' and new.politica_foto is null then new.politica_foto := case when new.foto_requerida then 'obligatoria' else 'opcional' end; end if; return new; end $$;
 create trigger t_pol before insert or update on public.ronda_puntos for each row execute function public.politica_foto();
