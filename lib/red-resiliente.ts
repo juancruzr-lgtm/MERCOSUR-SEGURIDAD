@@ -123,6 +123,7 @@ export type PasoRondaRed =
   | 'validar_qr_punto_ronda'
   | 'subir_foto_punto'
   | 'verificar_evidencia'
+  | 'vincular_evidencia'
 
 const limitadorRed = crearLimitador(MAX_EVENTOS_RED_POR_SESION)
 

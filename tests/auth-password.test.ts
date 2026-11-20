@@ -295,7 +295,7 @@ describe('reparación de accesos: nunca pisa la contraseña de una cuenta válid
   })
   it('las rutas administrativas exigen sesión con capacidad', () => {
     expect(leer('app/api/reset-user-password/route.ts')).toMatch(/tieneCapacidad\(acceso\.perfil, 'gestionar_personal'\)/)
-    expect(leer('app/api/admin/repair-auth-users/route.ts')).toMatch(/requireCapacidad\(req, admin\.client, 'configurar_sistema'/)
+    expect(leer('app/api/admin/repair-auth-users/route.ts')).toMatch(/tieneCapacidad\(acceso\.perfil, 'configurar_sistema'\)/)
   })
 })
 
