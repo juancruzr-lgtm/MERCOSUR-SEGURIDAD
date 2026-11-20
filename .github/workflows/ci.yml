@@ -1,0 +1,48 @@
+# Chequeos de calidad en PR y en main. Es SÓLO un check de GitHub: no participa
+# del despliegue de Vercel (Vercel construye por su cuenta con su integración de Git)
+# y no bloquea nada salvo que se lo marque como requerido en la protección de rama.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  calidad:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # el guard de migraciones compara con la rama base
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20  # @types/node ^20; vitest 4 pide >= 20.19
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci --no-audit --no-fund
+
+      - name: Pruebas (vitest)
+        run: npx vitest run
+
+      - name: Guard de migraciones
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            npm run migraciones:guard -- --base "origin/${{ github.base_ref }}"
+          else
+            npm run migraciones:guard
+          fi
+
+      - name: TypeScript (sin errores nuevos respecto de tsc-baseline.json)
+        run: npm run tsc:baseline
