@@ -9,7 +9,7 @@
 // escrita a mano) menos lo ya registrado como pagado (JC 08/10). El CONCEPTO lo
 // pide Galicia: 1 = sueldos, 11 = extras.
 
-import { esCuentaGalicia } from '@/lib/cuenta-banco'
+import { esCuentaGalicia, normalizarCuentaGalicia } from '@/lib/cuenta-banco'
 
 // Código de concepto de Galicia por tipo de archivo.
 export const CONCEPTO_BANCO = { sueldos: 1, extras: 11 } as const
@@ -31,7 +31,10 @@ function mapRows(data: any[]): FilaBanco[] {
 }
 
 function partir(rows: FilaBanco[]): ArchivoBanco {
-  const galicia = rows.filter(r => esCuentaGalicia(r.cuenta))
+  // La cuenta de Galicia se completa a 14 dígitos (00…) antes de escribirla: así
+  // sale bien aunque se haya cargado sin los ceros a la izquierda que Galicia
+  // omite en pantalla. El CBU/otro banco queda intacto en `excluidos`.
+  const galicia = rows.filter(r => esCuentaGalicia(r.cuenta)).map(r => ({ ...r, cuenta: normalizarCuentaGalicia(r.cuenta) }))
   const excluidos = rows.filter(r => !esCuentaGalicia(r.cuenta))
   return { rows: galicia, excluidos, total: Math.round(galicia.reduce((a, b) => a + b.importe, 0) * 100) / 100, error: null }
 }
@@ -61,7 +64,7 @@ export async function filasExtrasBanco(
   const r2 = (n: number) => Math.round(n * 100) / 100
   const conPendiente = extras.filter(e => e.pendiente > 0)
   const rows = conPendiente.filter(e => e.destino === 'galicia')
-    .map(e => ({ cuenta: String(e.cuenta ?? ''), nombre: e.nombre, importe: e.pendiente, usuarioId: e.usuarioId }))
+    .map(e => ({ cuenta: normalizarCuentaGalicia(e.cuenta), nombre: e.nombre, importe: e.pendiente, usuarioId: e.usuarioId }))
   const excluidos = conPendiente.filter(e => e.destino !== 'galicia')
     .map(e => ({ cuenta: String(e.cuenta ?? ''), nombre: e.nombre, importe: e.pendiente, usuarioId: e.usuarioId, motivo: e.motivo }))
   return {
