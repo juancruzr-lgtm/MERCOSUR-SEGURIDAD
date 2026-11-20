@@ -1,6 +1,13 @@
 # Activación: alta automática de protocolos y rondas
 
-Preparado el 19/11/2026. **Nada de esto se ejecutó.** Cada paso necesita tu orden; se pueden hacer de a uno y frenar en cualquier momento.
+**ENCENDIDO el 19/11/2026 a las 23:00** por orden de Gerencia ("instalalo ponelo a andar"):
+- migraciones 20261217 y 20261218 aplicadas (el protocolo guiado nace como borrador, como exige producción);
+- destinatarios cargados: Juan Cruz, Rodolfo y Aldo;
+- código en main; pantalla visible por defecto (apagar con NEXT_PUBLIC_CONFIGURACION_GUIADA=0); avisos sólo de objetivos creados desde el 19/11 23:00;
+- tareas automáticas programadas; primeras corridas OK (23:00 y 23:03), sin envíos porque no había pendientes;
+- pedido automático (paso 5) **no** encendido: el supervisor tilda "La ronda la crea el vigilador".
+
+Lo que sigue es la guía original.
 
 ## Lo que ya está verificado en producción (sólo lectura)
 - Existen las funciones de las que depende la migración: usuario actual, permisos de rondas, alcance por zona, permiso de protocolos, "hacer vigente" y las de envío seguro de WhatsApp.
