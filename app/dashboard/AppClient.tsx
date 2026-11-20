@@ -4,7 +4,6 @@ import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import NuevaPassword from '@/components/auth/NuevaPassword'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
-import { duracionProgramadaHoras, hayCoberturaPrevia, horasParaCargaManual } from '@/lib/carga-manual'
 import { alcanceDe, shellDeUsuario, tieneCapacidad, esAdminPleno, esGerenciaReal, puedeAdministrarRondas } from '@/lib/capacidades'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
@@ -5563,16 +5562,6 @@ function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegist
   })
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  // ¿El turno ya tiene un registro? Entonces es un relevo y se mandan las horas del tramo
-  // (la base las exige); si no, la base liquida la duración programada del turno.
-  const [coberturaPrevia, setCoberturaPrevia] = useState<boolean | null>(null)
-  useEffect(() => {
-    if (!turno?.id) return
-    let vivo = true
-    supabase.from('registros_asistencia').select('tipo_registro').eq('turno_id', turno.id)
-      .then(({ data, error: e }: any) => { if (vivo) setCoberturaPrevia(e ? null : hayCoberturaPrevia(data)) })
-    return () => { vivo = false }
-  }, [turno?.id])
 
   if (!turno) return null
 
@@ -5588,16 +5577,13 @@ function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegist
     try {
       const origenCobertura = user?.rol === 'admin' ? 'carga_admin' : 'carga_supervisor'
       const comentario = [form.motivo, form.observacion].filter(Boolean).join(' — ') || null
-      // Se relee al guardar (otra persona pudo cargar un registro mientras el modal estaba abierto).
-      const { data: previos, error: errPrevios } = await supabase.from('registros_asistencia').select('tipo_registro').eq('turno_id', turno.id)
-      if (errPrevios) { setError('No se pudo verificar si el turno ya tiene registros. Intentá de nuevo.'); setLoading(false); return }
       const { data: registroId, error: rpcError } = await supabase.rpc('registrar_cobertura', {
         p_turno_id:          turno.id,
         p_guardia_id:        form.guardia_id,
         p_origen:            origenCobertura,
         p_hora_entrada:      form.hora_entrada || null,
         p_hora_salida:       form.hora_salida  || null,
-        p_horas_liquidables: horasParaCargaManual({ coberturaPrevia: hayCoberturaPrevia(previos), entrada: form.hora_entrada, salida: form.hora_salida }),
+        p_horas_liquidables: null,
         p_comentario:        comentario,
       })
       if (rpcError) { setError(rpcError.message); setLoading(false); return }
@@ -5647,11 +5633,7 @@ function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegist
 
         {form.hora_entrada && form.hora_salida && (
           <div style={{ fontSize:13, color:'#94a3b8' }}>
-            {coberturaPrevia
-              ? <>Horas a liquidar (tramo del relevo): <strong style={{ color:'#10b981' }}>{calcHorasTrabajadas(form.hora_entrada, form.hora_salida).toFixed(2)} hs</strong></>
-              : coberturaPrevia === false
-                ? <>Horas a liquidar: <strong style={{ color:'#10b981' }}>{duracionProgramadaHoras(turno.hora_inicio, turno.hora_fin).toFixed(2)} hs</strong> (duración programada del turno; para un horario distinto, corregilo después en el registro)</>
-                : <>Horario cargado: {calcHorasTrabajadas(form.hora_entrada, form.hora_salida).toFixed(2)} hs</>}
+            Horas a liquidar: <strong style={{ color:'#10b981' }}>{calcHorasTrabajadas(form.hora_entrada, form.hora_salida).toFixed(2)} hs</strong>
           </div>
         )}
 
