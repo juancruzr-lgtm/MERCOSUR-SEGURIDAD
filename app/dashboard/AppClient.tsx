@@ -162,6 +162,8 @@ import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistencia
 import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 import { COLUMNAS_USUARIO, cargarCuentasBancarias } from '@/lib/usuarios-columnas'
 import { fusionarFila, fusionarLista, cambiosDeFormulario } from '@/lib/usuarios-edicion'
+import { leerSeccionDeUrl } from '@/lib/navegacion-seccion-url'
+import SeccionEnUrl from '@/components/navegacion/SeccionEnUrl'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -1666,33 +1668,34 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     }
   }
 
-  useEffect(() => {
-    let activo = true
-
-    const sincronizarEmailsAuth = async () => {
-      try {
-        const res = await fetch('/api/sync-auth-emails', {
-          method: 'POST',
-          headers: await headersAdmin(),
-        })
-        const data = await res.json()
-
-        if (res.ok && activo && Array.isArray(data.users)) {
+  // Sincronizar usuarios.email con el email de Auth. Antes corría sola cada vez que se abría
+  // Guardias (≈100 consultas a Auth, 16 s, y podía reescribir emails sin que nadie lo pidiera: F-14).
+  // Ahora es una acción explícita de herramientas técnicas (botón «Sincronizar emails Auth»).
+  const puedeSincronizarEmails = tieneCapacidad(user, 'configurar_sistema')
+  const sincronizarEmailsAuth = async () => {
+    setAccionLoading('sync-emails')
+    setMensaje(null)
+    try {
+      const res = await fetch('/api/sync-auth-emails', {
+        method: 'POST',
+        headers: await headersAdmin(),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setMensaje({ tipo:'error', texto:data.error || 'No se pudieron sincronizar los emails de Auth' })
+      } else {
+        if (Array.isArray(data.users)) {
           // Respuesta con pocas columnas: se fusiona, nunca reemplaza la fila completa.
           const actualizados = new Map<string, any>(data.users.map((u: Usuario) => [u.id, u]))
           setGuardias((prev: Usuario[]) => prev.map(g => actualizados.has(g.id) ? fusionarFila(g as any, actualizados.get(g.id)) as Usuario : g))
         }
-      } catch {
-        // La grilla sigue operativa aunque la sincronización técnica no responda.
+        setMensaje({ tipo:'ok', texto:data.message || 'Emails de Auth sincronizados.' })
       }
+    } catch (error) {
+      setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
     }
-
-    sincronizarEmailsAuth()
-
-    return () => {
-      activo = false
-    }
-  }, [])
+    setAccionLoading(null)
+  }
 
   const guardar = async () => {
     setMensaje(null)
@@ -2177,23 +2180,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
           </div>
         </div>
 
-        <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'flex-end' }}>
-          <button
-            style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'sync-auth' ? 0.65 : 1 }}
-            onClick={sincronizarAccesos}
-            disabled={accionLoading === 'sync-auth'}
-          >
-            {accionLoading === 'sync-auth' ? 'Sincronizando...' : 'Sincronizar accesos empleados'}
-          </button>
-
-          <button
-            style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'repair-auth' ? 0.65 : 1 }}
-            onClick={repararAccesosAuth}
-            disabled={accionLoading === 'repair-auth'}
-          >
-            {accionLoading === 'repair-auth' ? 'Reparando...' : 'Reparar accesos Auth'}
-          </button>
-
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'flex-end', alignItems:'flex-start' }}>
           {(puedePleno || puedeOperativo) && (
           <button
             style={{ ...S.btn, ...S.btnPrimary }}
@@ -2202,6 +2189,49 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
             + Nuevo empleado
           </button>
           )}
+
+          {/* F-36: sincronizar/reparar accesos son tareas técnicas de soporte,
+              no del día a día. Siguen acá, con la misma visibilidad, pero
+              plegadas en un menú secundario en vez de al lado del alta. */}
+          <details style={{ position:'relative' }}>
+            <summary
+              style={{ ...S.btn, ...S.btnSecondary, listStyle:'none', cursor:'pointer', userSelect:'none' }}
+              aria-label="Herramientas técnicas de accesos"
+            >
+              ⚙️ Herramientas técnicas ▾
+            </summary>
+            <div style={{ position:'absolute', right:0, top:'calc(100% + 6px)', zIndex:30, width:300, background:'#0f1629', border:'1px solid #334155', borderRadius:10, padding:12, display:'flex', flexDirection:'column', gap:8, boxShadow:'0 10px 30px rgba(0,0,0,.45)' }}>
+              <div style={{ fontSize:12, color:'#94a3b8', lineHeight:1.4 }}>
+                Mantenimiento de accesos (usuarios de ingreso). Usar sólo si alguien no puede entrar o su email no coincide.
+              </div>
+              <button
+                style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'sync-auth' ? 0.65 : 1 }}
+                onClick={sincronizarAccesos}
+                disabled={accionLoading === 'sync-auth'}
+              >
+                {accionLoading === 'sync-auth' ? 'Sincronizando...' : 'Sincronizar accesos empleados'}
+              </button>
+
+              <button
+                style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'repair-auth' ? 0.65 : 1 }}
+                onClick={repararAccesosAuth}
+                disabled={accionLoading === 'repair-auth'}
+              >
+                {accionLoading === 'repair-auth' ? 'Reparando...' : 'Reparar accesos Auth'}
+              </button>
+
+              {puedeSincronizarEmails && (
+              <button
+                style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'sync-emails' ? 0.65 : 1 }}
+                onClick={sincronizarEmailsAuth}
+                disabled={accionLoading === 'sync-emails'}
+                title='Copia a la ficha del empleado el email con el que entra (Auth) cuando difieren'
+              >
+                {accionLoading === 'sync-emails' ? 'Sincronizando...' : 'Sincronizar emails Auth'}
+              </button>
+              )}
+            </div>
+          </details>
         </div>
       </div>
 
@@ -2282,6 +2312,29 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
           </thead>
 
           <tbody>
+            {/* F-31: tabla vacía → decirlo, en vez de dejar sólo los encabezados. */}
+            {guardiasFiltrados.length === 0 && (
+              <tr>
+                <td
+                  colSpan={7 + ((buscando || grupoRol !== 'vigiladores') ? 1 : 0) + (esAdmin ? 1 : 0)}
+                  style={{ ...S.td, textAlign:'center', color:'#94a3b8', padding:'28px 12px' }}
+                >
+                  {idsFiltroGuardias.size > 0 ? 'Ningún empleado coincide con el filtro activo.' : buscando ? (
+                    <>
+                      Sin resultados para «{busquedaGuardias.trim()}».{' '}
+                      <button
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'4px 10px', fontSize:12, marginLeft:6 }}
+                        onClick={() => setBusquedaGuardias('')}
+                      >
+                        Limpiar búsqueda
+                      </button>
+                    </>
+                  ) : filtroActivo
+                    ? 'Ningún empleado de este grupo coincide con el filtro activo.'
+                    : 'No hay empleados en este grupo.'}
+                </td>
+              </tr>
+            )}
             {guardiasFiltrados.map((g: Usuario) => (
               <tr key={g.id}>
                 <td style={S.td}>
@@ -14123,7 +14176,10 @@ function TurnosBase() {
 }
 export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | null } = {}) {
   const [user, setUser] = useState<any>(null)
-  const [page, setPage] = useState('dashboard')
+  // La sección arranca desde la URL (`?page=`): recargar no vuelve al Panel
+  // Principal. Si no está permitida para esta persona, <SeccionEnUrl> la cambia
+  // por el Panel antes de que se vea (F-17).
+  const [page, setPage] = useState(() => (typeof window === 'undefined' ? null : leerSeccionDeUrl(window.location.search, ['page'])) ?? 'dashboard')
   const [guardias, setGuardias] = useState<Usuario[]>([])
   const [objetivos, setObjetivos] = useState<Objetivo[]>([])
   const [turnos, setTurnos] = useState<Turno[]>([])
@@ -14520,6 +14576,18 @@ const esGuardia = esRolGuardia(user.rol)
     ]}] : []),
   ]
 
+  // Secciones que esta persona puede abrir por URL: las del menú y los accesos
+  // sin entrada propia que ya se abren desde el Panel o desde enlaces (con el
+  // mismo permiso con que se dibujan). F-17.
+  const seccionesPermitidas = new Set<string>([
+    ...NAV.flatMap(g => g.items.map(i => i.id)),
+    'novedades',
+    ...(gestionaDatosSensibles(user) ? ['afip_empleados', 'legajo_cambios_datos', 'documentacion_legajo', 'legajo_historico'] : []),
+  ])
+  // Evaluación de supervisores se habilita con una consulta a la base: mientras
+  // no responde no se manda al Panel (la pantalla igual no se dibuja sin permiso).
+  const seccionesPendientes = new Set<string>(veLegajoSupervisores ? [] : ['evaluacion_supervisores'])
+
   const novedadesUrgentes = novedades.filter(n => n.prioridad === 'urgente' && n.estado !== 'resuelta').length
   const modoMenu = modoMenuAdmin(esPantallaChicaAdmin, menuColapsado)
   const misNovedades = novedades.filter(n => n.guardia_id === user.id)
@@ -14533,6 +14601,15 @@ const esGuardia = esRolGuardia(user.rol)
           Supervisor no se monta (ahí registra SupervisorMobile). */}
       {shellApp === 'admin' && user?.id && registraGpsEnVistaAdmin(user) && <RastreoGpsVistaAdmin userId={user.id} />}
       <div style={{ ...S.app, paddingTop:shellApp === 'admin' ? adminShellPaddingTop : 0 }}>
+      {/* F-17: la sección activa vive en `?page=` (recargar y «Atrás» del navegador). */}
+      <SeccionEnUrl
+        seccion={page}
+        onCambiar={destino => { setPage(destino); setMenuAbierto(false) }}
+        parametro="page"
+        porDefecto="dashboard"
+        permitidas={seccionesPermitidas}
+        pendientes={seccionesPendientes}
+      />
       <MenuAdmin
         secciones={NAV}
         page={page}

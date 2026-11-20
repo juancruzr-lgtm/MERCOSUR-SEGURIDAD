@@ -1,5 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { getSupabaseAdmin, nombreEmpleado, normalizeEmail, requireCapacidad, type UsuarioEmpleado } from '../_lib/employee-auth'
+
+// Copia a usuarios.email el email de Auth cuando difieren. Se dispara SÓLO desde el botón
+// «Sincronizar emails Auth» de Guardias (antes corría al abrir la pantalla: F-14).
+// Auth se lee en lote (listUsers paginado, ~1 pedido cada 1000 cuentas) en vez de un
+// getUserById por empleado (~100 pedidos, 16 s). Lo que se sincroniza no cambia.
+
+const POR_PAGINA = 1000
+const MAX_PAGINAS = 50
+
+/** Email de Auth por id de cuenta. null si listUsers falla (se cae al modo uno por uno). */
+async function emailsAuthEnLote(client: SupabaseClient): Promise<Map<string, string | null> | null> {
+  const emails = new Map<string, string | null>()
+  for (let page = 1; page <= MAX_PAGINAS; page += 1) {
+    const { data, error } = await client.auth.admin.listUsers({ page, perPage: POR_PAGINA })
+    if (error) return null
+    for (const u of data.users) emails.set(u.id, normalizeEmail(u.email) || null)
+    if (data.users.length < POR_PAGINA) return emails
+  }
+  return null // más cuentas que el tope: mejor el modo uno por uno que un mapa incompleto
+}
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -21,9 +42,20 @@ export async function POST(req: NextRequest) {
   let sincronizados = 0
   let sinAuth = 0
 
+  const enLote = await emailsAuthEnLote(admin.client)
+
   for (const usuario of (usuarios || []) as UsuarioEmpleado[]) {
-    const { data: authData, error: authError } = await admin.client.auth.admin.getUserById(usuario.auth_user_id!)
-    const authEmail = normalizeEmail(authData?.user?.email)
+    // Cuenta que no vino en el lote (o lote no disponible): se consulta sola, como antes,
+    // para conservar el mismo error/«sin Auth».
+    let authError: { message: string } | null = null
+    let authEmail: string | null | undefined
+    if (enLote?.has(usuario.auth_user_id!)) {
+      authEmail = enLote.get(usuario.auth_user_id!)
+    } else {
+      const { data: authData, error } = await admin.client.auth.admin.getUserById(usuario.auth_user_id!)
+      authError = error
+      authEmail = normalizeEmail(authData?.user?.email)
+    }
 
     if (authError || !authEmail) {
       sinAuth += 1
