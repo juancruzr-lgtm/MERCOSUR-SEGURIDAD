@@ -27,10 +27,23 @@ export async function GET(req: NextRequest) {
   ] = await Promise.all([
     client.from('usuarios').select('id, nombre, apellido, email, dni, legajo, rol, estado, auth_user_id, foto_url'),
     client.from('objetivos').select('id, nombre, cliente, direccion, lat, lng, radio_metros, checklist_plantilla_id, frecuencia_supervision_horas, zona_id, estado'),
-    client.from('turnos').select('id, guardia_id, objetivo_id, fecha, hora_inicio, hora_fin, estado')
-      .gte('fecha', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
-      .lte('fecha', new Date().toISOString().slice(0, 10)),
-    client.from('registros_asistencia').select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, lat_entrada, lng_entrada, foto_entrada_url, tipo_registro').order('created_at', { ascending: false }).limit(LIMIT_REGISTROS),
+    // 30 días de turnos superan las 1000 filas que PostgREST devuelve como
+    // máximo (noviembre 2026 ya tenía 1.120 en el mes): sin paginar, el chequeo
+    // "sin guardia" miraba sólo una parte. Orden estable fecha + id.
+    fetchPaginadoResult((desde, hasta) =>
+      client.from('turnos').select('id, guardia_id, objetivo_id, fecha, hora_inicio, hora_fin, estado')
+        .gte('fecha', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
+        .lte('fecha', new Date().toISOString().slice(0, 10))
+        .order('fecha', { ascending: false })
+        .order('id')
+        .range(desde, hasta)),
+    // .limit(5000) no pasaba de 1000 (tope de PostgREST) y `analisis_parcial`
+    // nunca se encendía. Se pagina hasta el techo deliberado.
+    fetchPaginadoResult((desde, hasta) =>
+      client.from('registros_asistencia').select('id, turno_id, guardia_id, hora_entrada_real, hora_salida_real, lat_entrada, lng_entrada, foto_entrada_url, tipo_registro')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(desde, hasta), undefined, LIMIT_REGISTROS),
     // El .limit(2000) no evitaba nada: PostgREST corta en 1000 sin avisar y las
     // métricas se calculaban sobre 1.000 de 1.253 supervisiones. El orden
     // secundario por id hace estable la paginación.
@@ -40,7 +53,10 @@ export async function GET(req: NextRequest) {
         .order('id', { ascending: false })
         .range(desde, hasta)),
     client.from('novedades').select('id, guardia_id, objetivo_id, tipo, descripcion, prioridad, estado, created_at'),
-    client.from('evidencias').select('id, proceso_tipo, proceso_id, guardia_id, objetivo_id, tipo_evidencia').limit(LIMIT_EVIDENCIAS),
+    fetchPaginadoResult((desde, hasta) =>
+      client.from('evidencias').select('id, proceso_tipo, proceso_id, guardia_id, objetivo_id, tipo_evidencia')
+        .order('id')
+        .range(desde, hasta), undefined, LIMIT_EVIDENCIAS),
     client.from('puestos').select('id, objetivo_id, nombre, activo'),
   ])
 

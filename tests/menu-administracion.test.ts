@@ -1,22 +1,28 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { describe, expect, it } from 'vitest'
+import { ITEMS_MENU_ADMIN, construirNavAdmin, type PermisosMenuAdmin } from '@/lib/menu-admin-nav'
 
-// El menú vive dentro de AppClient: se controla sobre el código fuente.
+// Las pantallas viven dentro de AppClient: se controlan sobre el código
+// fuente. El contenido del menú del shell admin está en lib/menu-admin-nav.
 const app = readFileSync(join(__dirname, '..', 'app', 'dashboard', 'AppClient.tsx'), 'utf8')
-const seccion = (titulo: string) => {
-  const i = app.indexOf(`{ section:'${titulo}'`)
-  const j = app.indexOf('{ section:', i + 10)
-  return app.slice(i, j < 0 ? undefined : j)
+const TODO: PermisosMenuAdmin = {
+  supervisarZona: true, supervisarTodasZonas: true, verDashboardGerencial: true, gestionarPersonal: true,
+  prepararLiquidacion: true, gestionarFacturacion: true, gestionaDatosSensibles: true, esAdminPleno: true,
+  veLegajoSupervisores: true, tableroGerenciaVisible: true, configuracionGuiadaVisible: true, gestionAdministracionVisible: true,
 }
+const NADA = Object.fromEntries(Object.keys(TODO).map(k => [k, false])) as PermisosMenuAdmin
+const idsMenu = (p: PermisosMenuAdmin) => construirNavAdmin(p).flatMap(s => s.items.map(i => i.id))
+const item = (id: string) => ITEMS_MENU_ADMIN.find(i => i.id === id)
 
 describe('Menú de Administración', () => {
-  const admin = seccion('ADMINISTRACIÓN')
   it('ya no muestra «Novedades» (novedades operativas por mes)', () => {
-    expect(admin).not.toMatch(/\{ id:'novedades', icon/)
+    expect(idsMenu(TODO)).not.toContain('novedades')
   })
   it('conserva «Novedades del Personal»', () => {
-    expect(admin).toMatch(/id:'novedades_personal', icon:'[^']+', label:'Novedades del Personal'/)
+    expect(item('novedades_personal')?.label).toBe('Novedades del Personal')
+    expect(idsMenu(TODO)).toContain('novedades_personal')
+    expect(idsMenu({ ...TODO, gestionarPersonal: false })).not.toContain('novedades_personal')
     expect(app).toMatch(/page === 'novedades_personal' && tieneCapacidad\(user, 'gestionar_personal'\) && <NovedadesPersonalPanel/)
   })
   it('la página de novedades sigue existiendo para los accesos desde el Panel y el Centro Operativo', () => {
@@ -28,10 +34,13 @@ describe('Menú de Administración', () => {
 })
 
 describe('Legajo Digital: una sola entrada', () => {
-  const admin = seccion('ADMINISTRACIÓN')
   it('el menú tiene «Legajo Digital» y no las tres entradas sueltas', () => {
-    expect(admin).toMatch(/gestionaDatosSensibles\(user\) \? \[\{ id:'legajo_digital', icon:'[^']+', label:'Legajo Digital' \}\]/)
-    expect(admin).not.toMatch(/id:'legajo_cambios_datos', icon|id:'documentacion_legajo', icon|id:'legajo_historico', icon/)
+    expect(item('legajo_digital')?.label).toBe('Legajo Digital')
+    expect(idsMenu({ ...NADA, gestionaDatosSensibles: true })).toContain('legajo_digital')
+    expect(idsMenu({ ...TODO, gestionaDatosSensibles: false })).not.toContain('legajo_digital')
+    for (const suelta of ['legajo_cambios_datos', 'documentacion_legajo', 'legajo_historico']) {
+      expect(idsMenu(TODO)).not.toContain(suelta)
+    }
   })
   it('los accesos anteriores siguen abriendo la misma pantalla, con el mismo permiso', () => {
     for (const [id, s] of [['legajo_cambios_datos', 'datos'], ['documentacion_legajo', 'documentacion'], ['legajo_historico', 'historico']]) {

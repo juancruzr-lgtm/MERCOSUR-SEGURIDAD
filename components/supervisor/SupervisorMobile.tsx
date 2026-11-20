@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { fetchEnLotesResult, fetchPaginadoResult } from '@/lib/fetch-paginado'
 import NuevaPassword from '@/components/auth/NuevaPassword'
 import { alcanceDe, puedeAdministrarRondas } from '@/lib/capacidades'
 import { filtrarTurnosParaAlertas, objetivoIdsParaAlertas } from '@/lib/alertas-alcance'
@@ -52,6 +53,8 @@ import { COLUMNAS_USUARIO } from '@/lib/usuarios-columnas'
 import { cambiosDeFormulario, fusionarFila } from '@/lib/usuarios-edicion'
 import PostulantesPanel from '@/components/postulantes/PostulantesPanel'
 import { apiPostulantesSupabase, leerSolicitudIA, lecturaIaVisible } from '@/lib/postulantes-supabase'
+import { leerSeccionDeUrl } from '@/lib/navegacion-seccion-url'
+import SeccionEnUrl from '@/components/navegacion/SeccionEnUrl'
 
 type EstadoTurno = 'programado' | 'pendiente de ingreso' | 'tardanza' | 'cubierto' | 'en turno' | 'finalizado' | 'descubierto' | 'reasignado'
 // Estados que el CHECK de turnos.estado admite. Acá figuraban sólo los tres
@@ -490,7 +493,9 @@ function resumenGps(registro: RegistroAsistencia | undefined, tipo: 'ingreso' | 
 }
 
 export default function SupervisorMobile({ user }: any) {
-  const [tab, setTab] = useState('inicio')
+  // Pestaña desde la URL (`?tab=`; también `?page=` de los enlaces de WhatsApp):
+  // recargar no vuelve a Inicio y «Atrás» recorre las pestañas (F-17).
+  const [tab, setTab] = useState(() => (typeof window === 'undefined' ? null : leerSeccionDeUrl(window.location.search, ['tab', 'page'])) ?? 'inicio')
   // Alta de vigiladores: sólo los supervisores que Administración habilitó
   // cargan entrevistas (la base lo decide; si la función no existe, no se muestra).
   const [cargaPostulantes, setCargaPostulantes] = useState(false)
@@ -645,13 +650,17 @@ export default function SupervisorMobile({ user }: any) {
       ultimasSupervisionesResult,
       contextoExigibilidadResult,
     ] = await Promise.all([
-      supabase
+      // Paginado: con «Mes actual» el rango supera las 1000 filas que PostgREST
+      // devuelve como máximo, sin error (noviembre 2026: 1.120 turnos).
+      fetchPaginadoResult<Turno>((desde, hasta) => supabase
         .from('turnos')
         .select('*')
         .gte('fecha', desdeConNocturno)
         .lte('fecha', rango.hasta)
         .order('fecha', { ascending: true })
-        .order('hora_inicio', { ascending: true }),
+        .order('hora_inicio', { ascending: true })
+        .order('id')
+        .range(desde, hasta)),
       supabase
         .from('objetivos')
         .select('id, nombre, cliente, direccion, lat, lng, radio_metros, estado, checklist_plantilla_id, frecuencia_supervision_horas, zona_id')
@@ -837,17 +846,25 @@ export default function SupervisorMobile({ user }: any) {
     }
 
     const turnoIds = turnosRango.map(t => t.id)
+    // En lotes y paginado: con «Mes actual» son más de 1000 turnos — la lista
+    // de ids no entra en una URL y el resultado pasaría el tope de PostgREST.
     const [{ data: registrosData, error: registrosError }, { data: intervencionesData, error: intervencionesError }] = await Promise.all([
-      supabase
+      fetchEnLotesResult<RegistroAsistencia>(turnoIds, (lote, desde, hasta) => supabase
         .from('registros_asistencia')
         .select('*')
-        .in('turno_id', turnoIds),
-      supabase
+        .in('turno_id', lote)
+        .order('id')
+        .range(desde, hasta)),
+      fetchEnLotesResult<any>(turnoIds, (lote, desde, hasta) => supabase
         .from('supervisor_intervenciones')
         .select('*')
-        .in('turno_id', turnoIds)
-        .order('created_at', { ascending: false }),
+        .in('turno_id', lote)
+        .order('created_at', { ascending: false })
+        .order('id')
+        .range(desde, hasta)),
     ])
+    // El orden por created_at desc vale por lote; se rehace sobre el total.
+    intervencionesData.sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)))
 
     if (registrosError) {
       setError(registrosError.message)
@@ -3300,6 +3317,16 @@ export default function SupervisorMobile({ user }: any) {
 
   return (
     <div style={container}>
+      {/* F-17: la pestaña activa vive en `?tab=`. Postulantes depende de una consulta a la base. */}
+      <SeccionEnUrl
+        seccion={tab}
+        onCambiar={t => { setTab(t); if (t !== 'objetivos') setObjetivoLegajoId(null) }}
+        parametro="tab"
+        alternativos={['page']}
+        porDefecto="inicio"
+        permitidas={new Set(tabs.map(t => t.id))}
+        pendientes={new Set(cargaPostulantes ? [] : ['postulantes'])}
+      />
       <header style={header}>
         <div>
           <div style={brand}>Supervisor Mobile</div>

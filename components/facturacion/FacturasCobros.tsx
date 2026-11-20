@@ -14,6 +14,7 @@ import { describirTasa } from '@/lib/facturacion/tasa-mora'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { AMBAR, CeldaInteres, DetalleInteres } from './InteresFactura'
+import { CeldaReclamo, ReclamosFactura, ultimoReclamo, type Reclamo } from './ReclamosFactura'
 
 const importeTexto = (c: number) => (c / 100).toFixed(2).replace('.', ',')
 const FILTROS: Array<[string, string]> = [['todas', 'Todas'], ['impagas', 'Impagas'], ['vencidas', 'Vencidas'], ['pagadas', 'Pagadas']]
@@ -37,10 +38,14 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
   const [abierta, setAbierta] = useState<string | null>(null)
   const [cond, setCond] = useState<CondicionesPago | null>(null)
   const [recarga, setRecarga] = useState(0)
+  const [reclamos, setReclamos] = useState<Reclamo[]>([])
+  const [paraReclamar, setParaReclamar] = useState(false)
   const { ocupado, correr, Mensaje } = useAccion()
   const hoy = fechaArgentina()
 
   async function cargar() {
+    // Reclamos: si la tabla todavía no existe (migración sin aplicar) la pantalla sigue andando sin ellos.
+    leer('fact_reclamos', q => q.is('anulado_at', null).order('fecha', { ascending: false }).limit(5000)).then(setReclamos).catch(() => setReclamos([]))
     const [s, c, a, co, cnd] = await Promise.all([
       leer('fact_v_saldos', q => q.order('fecha_emision').order('punto_venta').order('numero').limit(5000)),
       leer('fact_clientes', q => q.order('razon_social'), 'id, razon_social, cuit'),
@@ -65,11 +70,16 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
 
   const enriquecidas = useMemo(() => filas.map(f => ({ ...f, ...estadoCobro(f, hoy), vto: vencimientoDe(f), nv: numeroVisible({ tipo: f.tipo, puntoVenta: f.punto_venta, numero: Number(f.numero) }) })), [filas, hoy])
   const anios = useMemo(() => Array.from(new Set(enriquecidas.map(f => String(f.fecha_emision).slice(0, 4)))).sort().reverse(), [enriquecidas])
+  const impaga = (f: any) => ENTRA.impagas(f.estado)
+  // Impagas cuyo último reclamo pide volver a reclamar hoy o antes.
+  const tocaReclamar = (f: any) => { const r = ultimoReclamo(reclamos, f.comprobante_id); return impaga(f) && !!r?.proximo_contacto && r.proximo_contacto <= hoy }
+  const nParaReclamar = useMemo(() => enriquecidas.filter(tocaReclamar).length, [enriquecidas, reclamos]) // eslint-disable-line react-hooks/exhaustive-deps
   const visibles = useMemo(() => {
     const v = enriquecidas.filter(f => (!anio || String(f.fecha_emision).startsWith(anio)) && (!cli || f.cliente_id === cli) && ENTRA[filtro](f.estado)
+      && (!paraReclamar || tocaReclamar(f))
       && (!buscar || `${f.nv} ${nombre(f.cliente_id)}`.toLowerCase().includes(buscar.toLowerCase())))
     return recientes ? [...v].reverse() : v
-  }, [enriquecidas, anio, cli, filtro, buscar, recientes, clientes]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [enriquecidas, anio, cli, filtro, buscar, recientes, clientes, paraReclamar, reclamos]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const base = enriquecidas.filter(f => (!anio || String(f.fecha_emision).startsWith(anio)) && (!cli || f.cliente_id === cli))
   const suma = (pred: (f: any) => boolean, campo = 'saldo_c') => base.filter(pred).reduce((a, f) => a + Number(f[campo]), 0)
@@ -97,6 +107,7 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
         {FILTROS.map(([k, t]) => <button key={k} style={filtro === k ? S.btn : S.btn2} onClick={() => setFiltro(k)}>{t}</button>)}
         <input style={S.input} placeholder="Buscar número o cliente" value={buscar} onChange={e => setBuscar(e.target.value)} />
         <label style={S.sub}><input type="checkbox" checked={recientes} onChange={e => setRecientes(e.target.checked)} /> más recientes primero</label>
+        <label style={{ ...S.sub, color: nParaReclamar ? '#fbbf24' : undefined }}><input type="checkbox" checked={paraReclamar} onChange={e => setParaReclamar(e.target.checked)} /> para volver a reclamar hoy ({nParaReclamar})</label>
         <Mensaje />
       </div>
 
@@ -126,12 +137,14 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
                   <td style={S.num}>{Number(f.saldo_c) > 0 ? <b>{pesos(f.saldo_c)}</b> : '—'}</td>
                   <td style={S.td}>{fecha(f.vto)}</td>
                   <td style={S.td}><span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 999, border: `1px solid ${et.color}`, color: et.color, fontSize: 12, whiteSpace: 'nowrap' }}>
-                    {et.texto}{(f.estado === 'vencida' || f.estado === 'parcial') && f.diasVencida > 0 ? ` · ${f.diasVencida} d` : ''}</span></td>
+                    {et.texto}{(f.estado === 'vencida' || f.estado === 'parcial') && f.diasVencida > 0 ? ` · ${f.diasVencida} d` : ''}</span>
+                    <CeldaReclamo r={ultimoReclamo(reclamos, f.comprobante_id)} hoy={hoy} /></td>
                   <td style={S.td}>{fecha(ultimoCobro(f.comprobante_id))}</td>
                   <td style={S.num}><CeldaInteres i={intereses.porFactura?.get(f.comprobante_id)} cargando={intereses.cargando} /></td>
                 </tr>
                 {abiertaEsta && <tr><td colSpan={10} style={{ padding: 0 }}>
                   <DetalleFactura f={f} nombreCliente={nombre(f.cliente_id)} aps={aps.filter(a => a.comprobante_id === f.comprobante_id)} cobroPorId={cobroPorId}
+                    reclamos={reclamos} otrasImpagas={enriquecidas.filter(o => o.cliente_id === f.cliente_id && o.comprobante_id !== f.comprobante_id && impaga(o))}
                     alCambiar={recargarTodo} alVerCliente={() => alVerCliente(f.cliente_id)}
                     interes={intereses.porFactura?.get(f.comprobante_id)} cargandoInteres={intereses.cargando} alCambiarInteres={() => setRecarga(x => x + 1)} />
                 </td></tr>}
@@ -147,8 +160,8 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
   )
 }
 
-function DetalleFactura({ f, nombreCliente, aps, cobroPorId, alCambiar, alVerCliente, interes, cargandoInteres, alCambiarInteres }: {
-  f: any; nombreCliente: string; aps: any[]; cobroPorId: Map<string, any>; alCambiar: () => void; alVerCliente: () => void
+function DetalleFactura({ f, nombreCliente, aps, cobroPorId, reclamos, otrasImpagas, alCambiar, alVerCliente, interes, cargandoInteres, alCambiarInteres }: {
+  f: any; nombreCliente: string; aps: any[]; cobroPorId: Map<string, any>; reclamos: Reclamo[]; otrasImpagas: any[]; alCambiar: () => void; alVerCliente: () => void
   interes: InteresFactura | undefined; cargandoInteres: boolean; alCambiarInteres: () => void
 }) {
   const [comp, setComp] = useState<any>(null)
@@ -199,6 +212,7 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, alCambiar, alVerCli
             return <div key={a.id} style={{ ...S.fila, gap: 6 }}>{c ? `${fecha(c.fecha)} · ${c.medio}${c.cheque_numero ? ` n° ${c.cheque_numero}` : ''}${c.cheque_estado ? ` (${c.cheque_estado})` : ''}${c.referencia ? ` · ${c.referencia}` : ''}` : 'Retención'} · <b>{pesos(a.importe_c)}</b>
               {c && <button style={{ ...S.btnPeligro, padding: '2px 8px' }} disabled={ocupado} onClick={() => anularPago(c)}>Anular pago</button>}</div>
           }) : <div style={S.sub}>Sin cobros registrados.</div>}
+          <ReclamosFactura f={f} reclamos={reclamos} otrasImpagas={otrasImpagas} alCambiar={alCambiar} />
           <DetalleInteres comprobanteId={f.comprobante_id} i={interes} cargando={cargandoInteres} alCambiar={alCambiarInteres} />
           {hist.length > 0 && <details style={{ marginTop: 8 }}><summary style={S.sub}>Historial ({hist.length})</summary>
             {hist.map(h => <div key={h.id} style={S.sub}>{new Date(h.at).toLocaleString('es-AR')} · {h.accion}{h.datos?.motivo ? ` · ${h.datos.motivo}` : ''}</div>)}</details>}

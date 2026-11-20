@@ -12,6 +12,7 @@ import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
 import { construirResumenGuardiaVigiladores, plantillaLiquidacionResumenGuardia, grupoDeResumen, type GrupoResumen } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
+import { SELECT_TURNO_PANTALLA, cargarTurnosVentana, ventanaTurnosPantalla } from '@/lib/turnos-carga'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
   construirRevisionPorClave, esPendienteDeAccion, estadoRevision,
@@ -76,6 +77,7 @@ import RastreoGpsVistaAdmin from '@/components/supervisor/RastreoGpsVistaAdmin'
 import { registraGpsEnVistaAdmin } from '@/lib/supervisor-gps'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import MenuAdmin from '@/components/ui/MenuAdmin'
+import { construirNavAdmin } from '@/lib/menu-admin-nav'
 import { ANCHO_MENU_ADMIN, guardarColapsado, leerColapsadoGuardado, modoMenuAdmin } from '@/lib/menu-admin'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
 import ReferenciasIAPanel from '@/components/ia/ReferenciasIAPanel'
@@ -101,7 +103,7 @@ import {
 } from '@/lib/periodo-argentina'
 import {
   PRIMER_PERIODO_SUPERVISIONES, SELECT_SUPERVISION_DETALLE, cargarSupervisionesDelPeriodo,
-  cargarTurnosDelPeriodo, supervisionesDelDia, supervisionesDelPeriodo, unirPorId,
+  cargarTurnosDelPeriodo, supervisionesDelDia, supervisionesDelPeriodo, supervisionesMesDesdeDetalle, unirPorId,
 } from '@/lib/supervisiones-periodo'
 import { etiquetaMes as etiquetaMesLargo } from '@/lib/desempeno-datos'
 import {
@@ -110,9 +112,13 @@ import {
 import { ETIQUETA_ESTADO as ETIQUETA_CUMPLIMIENTO, resumenCorto } from '@/lib/cumplimiento'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
+import RondasPausadasPlegable from '@/components/rondas/RondasPausadasPlegable'
+import BotonVolver, { usePilaSecciones } from '@/components/navegacion/BotonVolver'
 import ControlPlanillasPanel from '@/components/planillas/ControlPlanillasPanel'
 import ControlImagenesIAPanel from '@/components/ia/ControlImagenesIAPanel'
 import ControlSupervisionesPanel from '@/components/supervisiones/ControlSupervisionesPanel'
+import ControlPreventivoPanel from '@/components/control-preventivo/ControlPreventivoPanel'
+import { controlPreventivoVisible } from '@/lib/control-preventivo'
 import SalidasAnticipadasPanel from '@/components/supervisiones/SalidasAnticipadasPanel'
 import EvaluacionSupervisoresPanel from '@/components/supervisiones/EvaluacionSupervisoresPanel'
 import { useAccesoLegajoSupervisores } from '@/components/supervisiones/useAccesoLegajoSupervisores'
@@ -161,6 +167,8 @@ import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistencia
 import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 import { COLUMNAS_USUARIO, cargarCuentasBancarias } from '@/lib/usuarios-columnas'
 import { fusionarFila, fusionarLista, cambiosDeFormulario } from '@/lib/usuarios-edicion'
+import { leerSeccionDeUrl } from '@/lib/navegacion-seccion-url'
+import SeccionEnUrl from '@/components/navegacion/SeccionEnUrl'
 
 const SupervisionMap = dynamic(() => import('@/components/supervisiones/SupervisionMap'), {
   ssr: false,
@@ -1125,6 +1133,16 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
         />
       </div>
 
+      {/* ── 6b. CONTROL PREVENTIVO (oculto salvo NEXT_PUBLIC_CONTROL_PREVENTIVO=1)
+          Sólo lectura: supervisiones vencidas con responsable y escalamiento,
+          puestos sin cubrir de las próximas 48 h y rondas incompletas con
+          clasificación sugerida. No envía nada. */}
+      {controlPreventivoVisible() && (
+        <div style={{ ...alertBox, marginTop:16 }}>
+          <ControlPreventivoPanel />
+        </div>
+      )}
+
       {/* ── 7. CONTROL DE IMÁGENES IA ───────────────────────────────────── */}
       <div style={{ ...alertBox, marginTop:16 }}>
         <ControlImagenesIAPanel onVerTodas={() => onNavigate?.('revision_fotos_ia')} />
@@ -1665,33 +1683,34 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     }
   }
 
-  useEffect(() => {
-    let activo = true
-
-    const sincronizarEmailsAuth = async () => {
-      try {
-        const res = await fetch('/api/sync-auth-emails', {
-          method: 'POST',
-          headers: await headersAdmin(),
-        })
-        const data = await res.json()
-
-        if (res.ok && activo && Array.isArray(data.users)) {
+  // Sincronizar usuarios.email con el email de Auth. Antes corría sola cada vez que se abría
+  // Guardias (≈100 consultas a Auth, 16 s, y podía reescribir emails sin que nadie lo pidiera: F-14).
+  // Ahora es una acción explícita de herramientas técnicas (botón «Sincronizar emails Auth»).
+  const puedeSincronizarEmails = tieneCapacidad(user, 'configurar_sistema')
+  const sincronizarEmailsAuth = async () => {
+    setAccionLoading('sync-emails')
+    setMensaje(null)
+    try {
+      const res = await fetch('/api/sync-auth-emails', {
+        method: 'POST',
+        headers: await headersAdmin(),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setMensaje({ tipo:'error', texto:data.error || 'No se pudieron sincronizar los emails de Auth' })
+      } else {
+        if (Array.isArray(data.users)) {
           // Respuesta con pocas columnas: se fusiona, nunca reemplaza la fila completa.
           const actualizados = new Map<string, any>(data.users.map((u: Usuario) => [u.id, u]))
           setGuardias((prev: Usuario[]) => prev.map(g => actualizados.has(g.id) ? fusionarFila(g as any, actualizados.get(g.id)) as Usuario : g))
         }
-      } catch {
-        // La grilla sigue operativa aunque la sincronización técnica no responda.
+        setMensaje({ tipo:'ok', texto:data.message || 'Emails de Auth sincronizados.' })
       }
+    } catch (error) {
+      setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
     }
-
-    sincronizarEmailsAuth()
-
-    return () => {
-      activo = false
-    }
-  }, [])
+    setAccionLoading(null)
+  }
 
   const guardar = async () => {
     setMensaje(null)
@@ -2176,23 +2195,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
           </div>
         </div>
 
-        <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'flex-end' }}>
-          <button
-            style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'sync-auth' ? 0.65 : 1 }}
-            onClick={sincronizarAccesos}
-            disabled={accionLoading === 'sync-auth'}
-          >
-            {accionLoading === 'sync-auth' ? 'Sincronizando...' : 'Sincronizar accesos empleados'}
-          </button>
-
-          <button
-            style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'repair-auth' ? 0.65 : 1 }}
-            onClick={repararAccesosAuth}
-            disabled={accionLoading === 'repair-auth'}
-          >
-            {accionLoading === 'repair-auth' ? 'Reparando...' : 'Reparar accesos Auth'}
-          </button>
-
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'flex-end', alignItems:'flex-start' }}>
           {(puedePleno || puedeOperativo) && (
           <button
             style={{ ...S.btn, ...S.btnPrimary }}
@@ -2201,6 +2204,49 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
             + Nuevo empleado
           </button>
           )}
+
+          {/* F-36: sincronizar/reparar accesos son tareas técnicas de soporte,
+              no del día a día. Siguen acá, con la misma visibilidad, pero
+              plegadas en un menú secundario en vez de al lado del alta. */}
+          <details style={{ position:'relative' }}>
+            <summary
+              style={{ ...S.btn, ...S.btnSecondary, listStyle:'none', cursor:'pointer', userSelect:'none' }}
+              aria-label="Herramientas técnicas de accesos"
+            >
+              ⚙️ Herramientas técnicas ▾
+            </summary>
+            <div style={{ position:'absolute', right:0, top:'calc(100% + 6px)', zIndex:30, width:300, background:'#0f1629', border:'1px solid #334155', borderRadius:10, padding:12, display:'flex', flexDirection:'column', gap:8, boxShadow:'0 10px 30px rgba(0,0,0,.45)' }}>
+              <div style={{ fontSize:12, color:'#94a3b8', lineHeight:1.4 }}>
+                Mantenimiento de accesos (usuarios de ingreso). Usar sólo si alguien no puede entrar o su email no coincide.
+              </div>
+              <button
+                style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'sync-auth' ? 0.65 : 1 }}
+                onClick={sincronizarAccesos}
+                disabled={accionLoading === 'sync-auth'}
+              >
+                {accionLoading === 'sync-auth' ? 'Sincronizando...' : 'Sincronizar accesos empleados'}
+              </button>
+
+              <button
+                style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'repair-auth' ? 0.65 : 1 }}
+                onClick={repararAccesosAuth}
+                disabled={accionLoading === 'repair-auth'}
+              >
+                {accionLoading === 'repair-auth' ? 'Reparando...' : 'Reparar accesos Auth'}
+              </button>
+
+              {puedeSincronizarEmails && (
+              <button
+                style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'sync-emails' ? 0.65 : 1 }}
+                onClick={sincronizarEmailsAuth}
+                disabled={accionLoading === 'sync-emails'}
+                title='Copia a la ficha del empleado el email con el que entra (Auth) cuando difieren'
+              >
+                {accionLoading === 'sync-emails' ? 'Sincronizando...' : 'Sincronizar emails Auth'}
+              </button>
+              )}
+            </div>
+          </details>
         </div>
       </div>
 
@@ -2281,6 +2327,29 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
           </thead>
 
           <tbody>
+            {/* F-31: tabla vacía → decirlo, en vez de dejar sólo los encabezados. */}
+            {guardiasFiltrados.length === 0 && (
+              <tr>
+                <td
+                  colSpan={7 + ((buscando || grupoRol !== 'vigiladores') ? 1 : 0) + (esAdmin ? 1 : 0)}
+                  style={{ ...S.td, textAlign:'center', color:'#94a3b8', padding:'28px 12px' }}
+                >
+                  {idsFiltroGuardias.size > 0 ? 'Ningún empleado coincide con el filtro activo.' : buscando ? (
+                    <>
+                      Sin resultados para «{busquedaGuardias.trim()}».{' '}
+                      <button
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'4px 10px', fontSize:12, marginLeft:6 }}
+                        onClick={() => setBusquedaGuardias('')}
+                      >
+                        Limpiar búsqueda
+                      </button>
+                    </>
+                  ) : filtroActivo
+                    ? 'Ningún empleado de este grupo coincide con el filtro activo.'
+                    : 'No hay empleados en este grupo.'}
+                </td>
+              </tr>
+            )}
             {guardiasFiltrados.map((g: Usuario) => (
               <tr key={g.id}>
                 <td style={S.td}>
@@ -4613,13 +4682,21 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   // programación, hecha desde el legajo del objetivo) puede haber cambiado
   // desde que se cargaron los datos globales al iniciar sesión. Sin esto no
   // se vería "sin F5" al navegar acá después de publicar.
+  //
+  // Paginado (lib/turnos-carga): PostgREST corta en 1000 filas sin error y
+  // noviembre 2026 ya tenía 1.120 turnos — «Mes actual» mostraba 1.000 (F-03).
+  const recargarTurnos = async (): Promise<string | null> => {
+    const { desde, hastaExclusivo } = ventanaTurnosPantalla(fechaHoyArgentina())
+    const { data, error: errCarga } = await cargarTurnosVentana<Turno>(supabase, desde, hastaExclusivo)
+    if (errCarga) return errCarga.message ?? String(errCarga)
+    setTurnos(data)
+    return null
+  }
   useEffect(() => {
     let vigente = true
-    const desdeStr = `${mesActualArgentina()}-01`
-    const hastaISO = inicioMesSiguienteArgISO()
-    const hastaStr = hastaISO.slice(0, 10)
-    void supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false })
-      .then(({ data }) => { if (vigente && data) setTurnos(data) })
+    void recargarTurnos().then(err => {
+      if (vigente && err) setError(`No se pudieron cargar los turnos: ${err}`)
+    })
     return () => { vigente = false }
   }, [])
 
@@ -4914,10 +4991,8 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       setAsignandoVacante(false)
       return
     }
-    const { data: turnosActualizados } = await supabase
-      .from('turnos').select('*')
-      .order('fecha', { ascending: false }).order('hora_inicio', { ascending: true })
-    if (turnosActualizados) setTurnos(turnosActualizados)
+    const errRefresco = await recargarTurnos()
+    if (errRefresco) setError(`Vigilador asignado, pero no se pudo refrescar la lista: ${errRefresco}`)
     setMensaje('✓ Vigilador asignado sobre la vacante programada')
     setAsignandoVacante(false)
     setVacantesAlta(null)
@@ -4990,14 +5065,8 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       const filtroDestino = filtroFechaTurnosIncluye(filtroFecha, payload.fecha)
         ? filtroFecha
         : filtroFechaTurnosParaFecha(payload.fecha)
-      const { data: turnosActualizados, error: refreshError } = await supabase
-        .from('turnos')
-        .select('*')
-        .order('fecha', { ascending: false })
-        .order('hora_inicio', { ascending: true })
-
-      if (turnosActualizados) setTurnos(turnosActualizados)
-      if (refreshError) setError(`Turno creado, pero no se pudo refrescar la lista: ${refreshError.message}`)
+      const refreshError = await recargarTurnos()
+      if (refreshError) setError(`Turno creado, pero no se pudo refrescar la lista: ${refreshError}`)
 
       setFiltroFecha(filtroDestino)
       setMensaje('✓ Turno creado correctamente')
@@ -5097,6 +5166,9 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       )}
 
       <div style={S.card}>
+        <div style={{ fontSize:12, color:'#64748b', marginBottom:8 }}>
+          {filtrados.length.toLocaleString('es-AR')} {filtrados.length === 1 ? 'turno' : 'turnos'} · {rangoFecha.label}
+        </div>
         <table style={S.table}>
           <thead>
             <tr>
@@ -5661,18 +5733,22 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
         turnoId = nuevoTurno.id
         setTurnos((prev: Turno[]) => [...prev, nuevoTurno])
 
-        const usuarioActual = user?.id
-          ? user
-          : (await supabase.from('usuarios').select('id').eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id || '').single()).data
-        if (usuarioActual?.id) {
-          await supabase.from('turnos_auditoria').insert({
-            turno_id: turnoId,
-            modificado_por: usuarioActual.id,
-            campo: 'creacion',
-            valor_anterior: null,
-            valor_nuevo: `reporte/${origenAuditoria}`,
-            motivo: `Creado desde Reportes (${origenAuditoria}) — ${form.comentario || 'sin comentario'}`,
-          })
+        // Motivo del alta: lo registra el servidor (turnos_auditoria no admite
+        // escrituras desde el navegador). Si falla, el turno igual queda auditado
+        // por el trigger de alta; no se frena la carga.
+        try {
+          const { data: ses } = await supabase.auth.getSession()
+          const tk = ses.session?.access_token
+          if (tk) {
+            const r = await fetch('/api/turnos/auditoria-alta', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tk}` },
+              body: JSON.stringify({ turno_id: turnoId, origen: origenAuditoria, comentario: form.comentario || '' }),
+            })
+            if (!r.ok) console.warn('[reportes] motivo del alta no registrado:', r.status)
+          }
+        } catch (e) {
+          console.warn('[reportes] motivo del alta no registrado:', e)
         }
       }
 
@@ -6817,6 +6893,167 @@ function Asistencia({ registros, setRegistros, turnos, setTurnos, guardias, obje
   )
 }
 
+// Anulación de una carga manual desde Reportes → «Planilla empleado». Misma RPC
+// y mismo texto que el modal de Asistencia (anular_registro_manual: motivo
+// obligatorio, horas_liquidables = 0, auditoría; nada se borra). El registro
+// queda en la planilla marcado como anulado, igual que en la base.
+function AnularCargaManualModal({ registro, onClose, setRegistros }: { registro: RegistroAsistencia; onClose: () => void; setRegistros: any }) {
+  const [motivo, setMotivo] = useState('')
+  const [anulando, setAnulando] = useState(false)
+
+  const anular = async () => {
+    const motivoLimpio = motivo.trim()
+    if (!motivoLimpio || registro.tipo_registro !== 'carga_manual') return
+    setAnulando(true)
+    try {
+      const { error } = await supabase.rpc('anular_registro_manual', {
+        p_registro_id: registro.id,
+        p_motivo: motivoLimpio,
+      })
+      if (error) throw error
+      setRegistros((prev: RegistroAsistencia[]) => prev.map((r: RegistroAsistencia) => r.id === registro.id
+        ? { ...r, registro_anulado_at: new Date().toISOString(), registro_anulado_motivo: motivoLimpio, horas_liquidables: 0 } as RegistroAsistencia
+        : r))
+      onClose()
+    } catch (e: any) {
+      alert(e.message || 'Error al anular')
+    } finally {
+      setAnulando(false)
+    }
+  }
+
+  return (
+    <Modal title="Anular registro manual" onClose={onClose}>
+      <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
+        Esta acción anulará lógicamente el registro de carga manual. Las horas liquidables pasarán a 0. La operación queda registrada en auditoría.
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>Motivo de anulación *</label>
+        <textarea
+          style={{ ...S.input, resize: 'vertical', minHeight: 80 }}
+          value={motivo}
+          onChange={e => setMotivo(e.target.value)}
+          placeholder="Ingrese el motivo de la anulación..."
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose}>Cancelar</button>
+        <button
+          style={{ ...S.btn, background: '#991b1b', color: '#fca5a5', border: '1px solid #7f1d1d', opacity: !motivo.trim() || anulando ? 0.5 : 1 }}
+          disabled={!motivo.trim() || anulando}
+          onClick={anular}
+        >
+          {anulando ? 'Anulando...' : 'Confirmar anulación'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+// Edición de una carga manual (fecha, horario, objetivo) desde Reportes. Misma
+// RPC que Asistencia (corregir_turno_manual_operativo: motivo obligatorio,
+// auditoría de turno y registro).
+function EditarCargaManualModal({ registro, onClose, turnos, setTurnos, setRegistros, objetivos }: { registro: RegistroAsistencia; onClose: () => void; turnos: Turno[]; setTurnos: any; setRegistros: any; objetivos: Objetivo[] }) {
+  const turnoInicial = turnos.find((t: Turno) => t.id === registro.turno_id)
+  const [form, setForm] = useState({
+    fecha: turnoInicial?.fecha || '',
+    objetivo_id: (registro as any).objetivo_final_id ?? turnoInicial?.objetivo_id ?? '',
+    hora_inicio: turnoInicial?.hora_inicio?.slice(0, 5) || '',
+    hora_fin: turnoInicial?.hora_fin?.slice(0, 5) || '',
+    motivo: '',
+  })
+  const [guardando, setGuardando] = useState(false)
+
+  const guardar = async () => {
+    if (!form.motivo.trim()) return
+    const turno = turnos.find((t: Turno) => t.id === registro.turno_id)
+    if (!turno) {
+      alert('No se encontró el turno de este registro entre los cargados. Recargá la pantalla y volvé a intentar.')
+      return
+    }
+    setGuardando(true)
+    try {
+      const cambioFecha = form.fecha !== turno.fecha
+      const cambioHorario = form.hora_inicio !== turno.hora_inicio?.slice(0, 5) || form.hora_fin !== turno.hora_fin?.slice(0, 5)
+      const cambioObjetivo = form.objetivo_id !== ((registro as any).objetivo_final_id ?? turno.objetivo_id)
+      if (!cambioFecha && !cambioHorario && !cambioObjetivo) {
+        onClose()
+        return
+      }
+      const { data, error } = await supabase.rpc('corregir_turno_manual_operativo', {
+        p_operacion_id: crypto.randomUUID(),
+        p_registro_id: registro.id,
+        p_fecha: cambioFecha ? form.fecha : null,
+        p_hora_inicio: cambioHorario ? form.hora_inicio + ':00' : null,
+        p_hora_fin: cambioHorario ? form.hora_fin + ':00' : null,
+        p_objetivo_id: cambioObjetivo ? form.objetivo_id : null,
+        p_motivo: form.motivo.trim(),
+      })
+      if (error) throw error
+      const resultado = data as { turno: { id: string; fecha: string; hora_inicio: string; hora_fin: string; objetivo_id: string }; registro: { id: string; horas_liquidables: number } }
+      setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turno.id ? { ...t, fecha: resultado.turno.fecha, hora_inicio: resultado.turno.hora_inicio, hora_fin: resultado.turno.hora_fin, objetivo_id: resultado.turno.objetivo_id } : t))
+      setRegistros((prev: RegistroAsistencia[]) =>
+        prev.map((r: RegistroAsistencia) => r.id === registro.id ? { ...r, horas_liquidables: resultado.registro.horas_liquidables, objetivo_final_id: cambioObjetivo ? form.objetivo_id : (r as any).objetivo_final_id } : r)
+      )
+      onClose()
+    } catch (e: any) {
+      alert(e.message || 'Error al guardar')
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  return (
+    <Modal title="Editar registro manual" onClose={onClose}>
+      <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
+        Corrección de registro de carga manual. Los cambios quedan registrados en auditoría.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Fecha *</label>
+          <input type="date" style={S.input} value={form.fecha} onChange={e => setForm({ ...form, fecha: e.target.value })} />
+        </div>
+        <div>
+          <label style={S.label}>Objetivo</label>
+          <select style={S.select} value={form.objetivo_id} onChange={e => setForm({ ...form, objetivo_id: e.target.value })}>
+            <option value="">— Sin objetivo —</option>
+            {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Hora inicio</label>
+          <input type="time" style={S.input} value={form.hora_inicio} onChange={e => setForm({ ...form, hora_inicio: e.target.value })} />
+        </div>
+        <div>
+          <label style={S.label}>Hora fin</label>
+          <input type="time" style={S.input} value={form.hora_fin} onChange={e => setForm({ ...form, hora_fin: e.target.value })} />
+        </div>
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>Motivo de corrección *</label>
+        <textarea
+          style={{ ...S.input, resize: 'vertical', minHeight: 80 }}
+          value={form.motivo}
+          onChange={e => setForm({ ...form, motivo: e.target.value })}
+          placeholder="Ingrese el motivo de la corrección..."
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose}>Cancelar</button>
+        <button
+          style={{ ...S.btn, ...S.btnPrimary, opacity: !form.motivo.trim() || !form.fecha || guardando ? 0.5 : 1 }}
+          disabled={!form.motivo.trim() || !form.fecha || guardando}
+          onClick={guardar}
+        >
+          {guardando ? 'Guardando...' : 'Guardar cambios'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
 function Novedades({ novedades, setNovedades, guardias, objetivos, filtroActivo, limpiarFiltro }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', tipo:'Rutina', descripcion:'', prioridad:'normal' })
@@ -6999,6 +7236,8 @@ function Novedades({ novedades, setNovedades, guardias, objetivos, filtroActivo,
 
 function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objetivos, novedades, supervisorZonas = [], filtroActivo, limpiarFiltro, user }: any) {
   const [registroCorrigiendo, setRegistroCorrigiendo] = useState<RegistroAsistencia | null>(null)
+  const [cargaManualAnulando, setCargaManualAnulando] = useState<RegistroAsistencia | null>(null)
+  const [cargaManualEditando, setCargaManualEditando] = useState<RegistroAsistencia | null>(null)
   const [turnoParaCargaManual, setTurnoParaCargaManual] = useState<Turno | null>(null)
   const [agregarRegistroContexto, setAgregarRegistroContexto] = useState<{ empleadoId?: string; objetivoId?: string } | null>(null)
   const empleados = guardias.filter((g: Usuario) => g.rol !== 'admin')
@@ -7301,7 +7540,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       // (fuente de SUPERVISIONES). La ventana de supervisiones es por
       // created_at en hora argentina, igual que las ve el supervisor.
       supabase.from('supervisores_guardia').select('supervisor_id, fecha, hora_inicio, hora_fin, zona, estado').gte('fecha', desdeStr).lte('fecha', hastaStr).eq('estado', 'activo'),
-      supabase.from('supervisiones').select('supervisor_id, objetivo_id, estado, created_at').gte('created_at', `${desdeStr}T00:00:00-03:00`).lt('created_at', `${new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10)}T00:00:00-03:00`),
+      // Paginado: un mes de supervisiones ya pasa las 500 y PostgREST corta en 1000 sin error.
+      fetchPaginadoResult((desde, hasta) => supabase.from('supervisiones').select('id, supervisor_id, objetivo_id, estado, created_at').gte('created_at', `${desdeStr}T00:00:00-03:00`).lt('created_at', `${new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10)}T00:00:00-03:00`).order('created_at').order('id').range(desde, hasta)),
     ]).then(([turnos, registros, nl, acept, soli, revi, noctExc, supGuardias, supervisionesRes]) => {
       setTurnosReportes(turnos)
       setRegistrosReportes(registros)
@@ -8558,7 +8798,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         {row._registro.tipo_registro === 'carga_manual' && !row._registro.registro_anulado_at && (
                           <button
                             style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#1e40af', color:'#93c5fd', border:'1px solid #1d4ed8' }}
-                            onClick={() => abrirEdicionManual(row._registro)}
+                            onClick={() => setCargaManualEditando(row._registro)}
                           >
                             Editar
                           </button>
@@ -8566,7 +8806,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         {row._registro.tipo_registro === 'carga_manual' && !row._registro.registro_anulado_at && (
                           <button
                             style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#7f1d1d', color:'#fca5a5', border:'1px solid #991b1b' }}
-                            onClick={() => { setRegistroAnulando(row._registro); setMotivoAnulacion('') }}
+                            onClick={() => setCargaManualAnulando(row._registro)}
                           >
                             Anular
                           </button>
@@ -9007,6 +9247,18 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             )}
           </div>
         </div>
+      )}
+
+      {/* La planilla lee turnosReportes/registrosReportes (el mes elegido), no
+          el estado global del mes actual: con el global, editar un mes anterior
+          no encontraba el turno y la planilla no se refrescaba. */}
+      {cargaManualAnulando && (
+        <AnularCargaManualModal registro={cargaManualAnulando} onClose={() => setCargaManualAnulando(null)} setRegistros={setRegistrosReportes} />
+      )}
+
+      {cargaManualEditando && (
+        <EditarCargaManualModal registro={cargaManualEditando} onClose={() => setCargaManualEditando(null)}
+          turnos={turnosReportes} setTurnos={setTurnosReportes} setRegistros={setRegistrosReportes} objetivos={objetivos} />
       )}
 
       {registroCorrigiendo && (
@@ -9602,12 +9854,17 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro, o
     // deduplicación y en las superposiciones del guardia sugerido.
     const fechaConsultaDesde = fechasVecinasTurno(fechaDesde)[0]
     const fechaConsultaHasta = fechasVecinasTurno(fechaHasta)[2]
+    // Paginado: la ventana de noviembre 2026 ya tenía 1.160 turnos y PostgREST
+    // corta en 1000 sin error — la deduplicación no veía el resto y la vista
+    // previa podía proponer turnos que ya existían.
     const [{ data: turnosExistentes, error: errTurnos }, { data: puestosPorObjetivo, error: errPuestos }] = await Promise.all([
-      supabase
+      fetchPaginadoResult((desde, hasta) => supabase
         .from('turnos')
         .select('id, objetivo_id, puesto_id, guardia_id, servicio_base_id, fecha, hora_inicio, hora_fin, estado, tipo_evento')
         .gte('fecha', fechaConsultaDesde)
-        .lte('fecha', fechaConsultaHasta),
+        .lte('fecha', fechaConsultaHasta)
+        .order('id')
+        .range(desde, hasta)),
       obtenerPuestosActivosDeObjetivos(serviciosActivos.map((s: any) => s.objetivo_id)),
     ])
     if (errTurnos || errPuestos || !puestosPorObjetivo) {
@@ -9695,7 +9952,7 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro, o
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
-        <div style={{ flex:1 }}><div style={S.title}>Servicios por Objetivo</div><div style={S.sub2}>{servicios.length} servicios configurados</div></div>
+        <div style={{ flex:1 }}><div style={S.title}>Servicios por objetivo</div><div style={S.sub2}>{servicios.length} servicios configurados</div></div>
         <button style={{ ...S.btn, ...S.btnPrimary }} onClick={abrirNuevo}>+ Nuevo Servicio</button>
       </div>
 
@@ -13071,9 +13328,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
 
       {/* Una ronda pausada NO genera alerta: sin este bloque, la ausencia de
           alertas acá es indistinguible de una ronda cumplida. */}
-      <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:24 }}>
-        <RondasPausadasPanel objetivoId={null} />
-      </div>
+      <RondasPausadasPlegable estilo={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:24 }} />
 
       {/* Cierre de turno modal */}
       {turnoParaCerrar && (
@@ -13631,7 +13886,7 @@ function TurnosBase() {
 
       <div style={s.header}>
         <div style={s.title}>
-          🧱 Turnos Base
+          🧱 Horarios tipo (turnos base)
         </div>
 
         <button
@@ -13938,7 +14193,10 @@ function TurnosBase() {
 }
 export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | null } = {}) {
   const [user, setUser] = useState<any>(null)
-  const [page, setPage] = useState('dashboard')
+  // La sección arranca desde la URL (`?page=`): recargar no vuelve al Panel
+  // Principal. Si no está permitida para esta persona, <SeccionEnUrl> la cambia
+  // por el Panel antes de que se vea (F-17).
+  const [page, setPage] = useState(() => (typeof window === 'undefined' ? null : leerSeccionDeUrl(window.location.search, ['page'])) ?? 'dashboard')
   const [guardias, setGuardias] = useState<Usuario[]>([])
   const [objetivos, setObjetivos] = useState<Objetivo[]>([])
   const [turnos, setTurnos] = useState<Turno[]>([])
@@ -13954,6 +14212,7 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
   const [supervisorZonas, setSupervisorZonas] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [filtros, setFiltros] = useState<Record<string, any>>({})
+  const volverSeccion = usePilaSecciones(page, setPage)
 
   // Entrada por URL: permite linkear a una sección con filtros ya puestos, por
   // ejemplo desde la planilla del guardia hacia la bandeja de revisión filtrada
@@ -14020,7 +14279,7 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
     const desdeStr = sumarDiasFecha(`${mesActual}-01`, -1)
     const hastaISO = new Date(Date.UTC(fdY, fdM, 1, 3, 0, 0)).toISOString()
     const hastaStr = hastaISO.slice(0, 10)
-    const [g, o, t, r, n, cp, ci, s, sm, su, z, sz] = await Promise.all([
+    const [g, o, t, r, n, cp, ci, s, su, z, sz] = await Promise.all([
       // Sin cuenta_bancaria (económico): se carga aparte sólo si puedeEconomico.
       supabase.from('usuarios').select('id, nombre, apellido, dni, telefono, legajo, rol, estado, foto_url, auth_user_id, created_at, email, cuil, legajo_visual, es_prueba, puesto_organizacional').order('apellido'),
       supabase.from('objetivos').select('*').order('nombre'),
@@ -14028,7 +14287,7 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
       // PostgREST devuelve como máximo, y el recorte es silencioso. Sin paginar,
       // `order('fecha', desc)` dejaba afuera los primeros días del mes.
       fetchPaginadoResult<Turno>((desde, hasta) =>
-        supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false }).order('id').range(desde, hasta),
+        supabase.from('turnos').select(SELECT_TURNO_PANTALLA).gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false }).order('id').range(desde, hasta),
       ),
       // El filtro va por la fecha del turno, no por `created_at` del registro:
       // una cobertura precargada o una regularización posterior pertenecen al
@@ -14061,12 +14320,6 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(desde, hasta)),
-      supabase
-        .from('supervisiones')
-        .select('id, objetivo_id, supervisor_id, estado, created_at')
-        .gte('created_at', inicioMes)
-        .lt('created_at', inicioMesSiguiente)
-        .order('created_at', { ascending: false }),
       // Última supervisión por objetivo. El .limit(5000) no servía: PostgREST
       // corta en 1000 igual, sin avisar, y con 1.253 supervisiones se perdían
       // 253 — objetivos que figuraban "sin supervisar nunca" por truncamiento.
@@ -14105,6 +14358,23 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
     if (n.data) setNovedades(n.data)
     if (cp.data) setChecklistPlantillas(cp.data)
     if (ci.data) setChecklistItems(ci.data)
+    // Supervisiones del mes (ranking): subconjunto exacto de la carga de
+    // detalle (mes anterior + actual, paginada, mismo orden), así que se
+    // deriva en el cliente en vez de pedir otra vez la tabla. Si el detalle
+    // falló, se cae a la consulta propia de antes: el ranking del mes no
+    // depende de que cargue el detalle (comportamiento previo).
+    const sm: { data: SupervisionRankingAdmin[] | null; error: any } = !s.error
+      ? { data: supervisionesMesDesdeDetalle(s.data as SupervisionAdmin[], inicioMes, inicioMesSiguiente) as SupervisionRankingAdmin[], error: null }
+      // Paginado: el 20/11/2026 el mes ya iba por 517 visitas; a fin de mes
+      // se acerca al tope silencioso de 1000 de PostgREST.
+      : await fetchPaginadoResult<SupervisionRankingAdmin>((desde, hasta) => supabase
+        .from('supervisiones')
+        .select('id, objetivo_id, supervisor_id, estado, created_at')
+        .gte('created_at', inicioMes)
+        .lt('created_at', inicioMesSiguiente)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(desde, hasta))
     // Supervisiones: un error no es "no hubo visitas". Se guarda y se muestra.
     const fallasSupervisiones = [
       s.error && `detalle: ${s.error.message ?? s.error}`,
@@ -14254,82 +14524,36 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'asistencia', icon:'✅', label:'Mi Asistencia' },
       { id:'novedades', icon:'📋', label:'Mis Novedades' },
     ]}
-  ] : [
-    { section:'GENERAL', items:[
-      { id:'dashboard', icon:'📊', label:'Panel Principal' },
-      // Tablero de Gerencia (vista previa): sólo con el interruptor encendido y
-      // alcance operativo (supervisor de zona o superior). Ver docs/tablero-gerencia.
-      ...(tableroGerenciaVisible() && (tieneCapacidad(user, 'supervisar_zona') || tieneCapacidad(user, 'supervisar_todas_zonas') || tieneCapacidad(user, 'ver_dashboard_gerencial'))
-        ? [{ id:'tablero_gerencia', icon:'🧭', label:'Tablero de Gerencia' }] : []),
-    ] },
-    { section:'OPERACIONES', items:[
-      { id:'guardias', icon:'👮', label:'Guardias' },
-      { id:'objetivos', icon:'🏢', label:'Objetivos' },
-      { id:'turnos', icon:'📅', label:'Turnos' },
-      { id:'asistencia', icon:'✅', label:'Asistencia' },
-      { id:'rondas', icon:'🔁', label:'Rondas' },
-      { id:'pagina_gps', icon:'📍', label:'Página GPS' },
-    ]},
-    { section:'ADMINISTRACIÓN', items:[
-      { id:'cierre_operativo', icon:'🌙', label:'Cierre Operativo' },
-      { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
-      { id:'revision_fotos_ia', icon:'🤖', label:'Revisión de fotos IA' },
-      { id:'revision_planillas', icon:'📑', label:'Revisión de planillas' },
-      { id:'supervisiones', icon:'☑️', label:'Supervisiones' },
-      // Evaluación de supervisores (ranking, horarios y legajos): sólo la lista
-      // de autorizaciones individuales de la base, igual para todo (JC 19/10).
-      ...(veLegajoSupervisores ? [{ id:'evaluacion_supervisores', icon:'🎯', label:'Evaluación de supervisores' }] : []),
-      // Salidas anticipadas: la resuelve Supervisión (su zona) o un superior.
-      // Administración la ve; quién puede resolver lo decide la base.
-      ...(tieneCapacidad(user, 'supervisar_zona') || tieneCapacidad(user, 'supervisar_todas_zonas')
-        ? [{ id:'salidas_anticipadas', icon:'🚪', label:'Salidas anticipadas' }] : []),
-      // «Novedades» (novedades operativas agrupadas por mes) salió del menú:
-      // no se usaba. La página sigue existiendo para los accesos desde el Panel
-      // y el Centro Operativo («Ver todas»). No es Novedades del Personal.
-      // Novedades del Personal: gestión de novedades laborales por rango/cantidad.
-      // Gateado por capacidad gestionar_personal (Administración/Gerencia).
-      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'novedades_personal', icon:'🧑‍💼', label:'Novedades del Personal' }] : []),
-      // «AFIP · Empleados» salió del menú: la corroboración ARCA vive en el
-      // legajo de cada persona (Legajo Digital → Datos personales).
-      // Estatuto Interno: versiones, aceptaciones y pendientes. Documentación
-      // laboral → Administración/Gerencia (gestionar_personal), no Supervisión.
-      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'estatuto_interno', icon:'📜', label:'Estatuto Interno' }] : []),
-      // Protocolos por objetivo: control general (versiones, aprobación,
-      // lecturas, diferencias). Administración/Gerencia y jefatura operativa;
-      // el supervisor lo ve en la ficha de cada objetivo de su zona.
-      ...(tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas') ? [{ id:'protocolos', icon:'📋', label:'Protocolos' }] : []),
-      ...(configuracionGuiadaVisible() && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas') || tieneCapacidad(user, 'supervisar_zona')) ? [{ id:'configuracion_guiada', icon:'🧩', label:'Configurar objetivos' }] : []),
-      // Legajo Digital (una sola entrada): datos personales, documentación
-      // (revisar, situación, vencimientos, auditoría) y archivo histórico.
-      // Sólo puesto Administración o Gerencia (sin overrides). No Supervisión.
-      ...(gestionaDatosSensibles(user) ? [{ id:'legajo_digital', icon:'🗂️', label:'Legajo Digital' }] : []),
-      ...(gestionAdministracionVisible() && gestionaDatosSensibles(user) ? [{ id:'gestion_administracion', icon:'📋', label:'Administración' }] : []),
-      { id:'reportes', icon:'📈', label:'Reportes' },
-      { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
-      { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
-    ]},
-    // GESTIÓN ECONÓMICA → Liquidación: Gerencia + Administración (capacidad
-    // preparar_liquidacion). NO Dirección Operativa/Jefe/supervisores/vigiladores.
-    // El acceso a Liquidación NO abre banco/Finanzas (capacidad económica aparte).
-    // Facturación: capacidad gestionar_facturacion (Gerencia, delegada y Administración).
-    ...(tieneCapacidad(user, 'preparar_liquidacion') || tieneCapacidad(user, 'gestionar_facturacion') ? [{ section:'GESTIÓN ECONÓMICA', items:[
-      ...(tieneCapacidad(user, 'preparar_liquidacion') ? [{ id:'liquidacion', icon:'💵', label:'Liquidación' }] : []),
-      ...(tieneCapacidad(user, 'gestionar_facturacion') ? [{ id:'facturacion', icon:'🧾', label:'Facturación' }] : []),
-    ]}] : []),
-    // CONFIGURACIÓN y SISTEMA: sólo ADMIN PLENO (jefe/dir. operativa/administración/
-    // gerencia + admin legado). Un supervisor con acceso a la interfaz admin
-    // (p.ej. Sergio) NO las ve: su vista queda operativa. No cambia a nadie que
-    // ya las veía.
-    ...(esAdminPleno(user) ? [{ section:'CONFIGURACIÓN', items:[
-      { id:'servicios_objetivo', icon:'📅', label:'Programación' },
-      { id:'checklists', icon:'☑️', label:'Checklists' },
-      { id:'turnos_base', icon:'⏰', label:'Turnos Base' },
-      { id:'zonas_operativas', icon:'🗺️', label:'Zonas operativas' },
-      { id:'referencias_ia', icon:'🖼️', label:'Referencias IA' },
-    ]}, { section:'SISTEMA', items:[
-      { id:'observacion', icon:'🔭', label:'Observación del Sistema' },
-    ]}] : []),
-  ]
+  ] : construirNavAdmin({
+    // Grupos, nombres y reglas de visibilidad: lib/menu-admin-nav.ts. Los ids
+    // y los permisos son los mismos de siempre (?page= y enlaces de WhatsApp).
+    supervisarZona: tieneCapacidad(user, 'supervisar_zona'),
+    supervisarTodasZonas: tieneCapacidad(user, 'supervisar_todas_zonas'),
+    verDashboardGerencial: tieneCapacidad(user, 'ver_dashboard_gerencial'),
+    gestionarPersonal: tieneCapacidad(user, 'gestionar_personal'),
+    prepararLiquidacion: tieneCapacidad(user, 'preparar_liquidacion'),
+    gestionarFacturacion: tieneCapacidad(user, 'gestionar_facturacion'),
+    gestionaDatosSensibles: gestionaDatosSensibles(user),
+    // CONFIGURACIÓN: sólo ADMIN PLENO. Un supervisor con acceso a la interfaz
+    // admin no la ve: su vista queda operativa.
+    esAdminPleno: esAdminPleno(user),
+    veLegajoSupervisores,
+    tableroGerenciaVisible: tableroGerenciaVisible(),
+    configuracionGuiadaVisible: configuracionGuiadaVisible(),
+    gestionAdministracionVisible: gestionAdministracionVisible(),
+  })
+
+  // Secciones que esta persona puede abrir por URL: las del menú y los accesos
+  // sin entrada propia que ya se abren desde el Panel o desde enlaces (con el
+  // mismo permiso con que se dibujan). F-17.
+  const seccionesPermitidas = new Set<string>([
+    ...NAV.flatMap(g => g.items.map(i => i.id)),
+    'novedades',
+    ...(gestionaDatosSensibles(user) ? ['afip_empleados', 'legajo_cambios_datos', 'documentacion_legajo', 'legajo_historico'] : []),
+  ])
+  // Evaluación de supervisores se habilita con una consulta a la base: mientras
+  // no responde no se manda al Panel (la pantalla igual no se dibuja sin permiso).
+  const seccionesPendientes = new Set<string>(veLegajoSupervisores ? [] : ['evaluacion_supervisores'])
 
   const novedadesUrgentes = novedades.filter(n => n.prioridad === 'urgente' && n.estado !== 'resuelta').length
   const modoMenu = modoMenuAdmin(esPantallaChicaAdmin, menuColapsado)
@@ -14344,6 +14568,15 @@ const esGuardia = esRolGuardia(user.rol)
           Supervisor no se monta (ahí registra SupervisorMobile). */}
       {shellApp === 'admin' && user?.id && registraGpsEnVistaAdmin(user) && <RastreoGpsVistaAdmin userId={user.id} />}
       <div style={{ ...S.app, paddingTop:shellApp === 'admin' ? adminShellPaddingTop : 0 }}>
+      {/* F-17: la sección activa vive en `?page=` (recargar y «Atrás» del navegador). */}
+      <SeccionEnUrl
+        seccion={page}
+        onCambiar={destino => { setPage(destino); setMenuAbierto(false) }}
+        parametro="page"
+        porDefecto="dashboard"
+        permitidas={seccionesPermitidas}
+        pendientes={seccionesPendientes}
+      />
       <MenuAdmin
         secciones={NAV}
         page={page}
@@ -14372,6 +14605,7 @@ const esGuardia = esRolGuardia(user.rol)
                   + cartel que vuelve, sin bloquear. Lleva a /estatuto (el shell
                   admin no tiene Mi Legajo). */}
               {user?.id && <AvisoEstatuto empleadoId={user.id} destino="/estatuto" />}
+              <BotonVolver page={page} onVolver={volverSeccion} />
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={alcanceDe(user) === 'todas'} usuarioId={user?.id ?? null} rol={user?.rol ?? null} puedePleno={tieneCapacidad(user, 'gestionar_personal')} puedeOperativo={tieneCapacidad(user, 'gestionar_personal_operativo')} user={user} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={navegarConFiltro} />}

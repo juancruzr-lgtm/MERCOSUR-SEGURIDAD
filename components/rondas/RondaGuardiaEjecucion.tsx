@@ -7,6 +7,7 @@ import {
   fotoEsObligatoriaEnVisita,
   mensajeContextoRegistrarPunto,
   registrarPuntoRonda,
+  sincronizarFotosPendientesRonda,
   subirFotoPuntoRonda,
   MENSAJE_FOTO_CONTROL_GPS,
   type GpsPuntoRonda,
@@ -40,6 +41,18 @@ import {
   leerFlujo,
   leerFotoPendiente,
 } from '@/lib/pendientes-camara'
+import { entradaEnCola, quitarDeCola } from '@/lib/rondas-cola-evidencias'
+
+/** Foto del punto que llegó (o no) al servidor sin quedar registrada todavía. */
+type SyncFoto =
+  | { estado: 'pendiente'; mensaje: string }
+  | { estado: 'sincronizada' }
+  | null
+
+const MENSAJE_SYNC_PENDIENTE_GENERICO =
+  'Foto guardada en el teléfono, pendiente de sincronizar. Se reintenta sola cuando vuelva la señal. El punto todavía NO quedó registrado.'
+/** Mientras haya una foto pendiente, se reintenta también cada tanto. */
+const INTERVALO_SYNC_FOTO_MS = 20_000
 
 /** Estado del punto guardado antes de abrir la cámara (lib/pendientes-camara). */
 interface PuntoEnCursoGuardado {
@@ -166,6 +179,9 @@ export default function RondaGuardiaEjecucion({
   // reintento reutiliza esa evidencia en lugar de volver a subir la imagen: en un
   // celular con mala señal la subida es la parte lenta del registro.
   const [evidenciaSubidaId, setEvidenciaSubidaId] = useState<string | null>(null)
+  // Foto subida que todavía no quedó vinculada a su registro (cola local,
+  // lib/rondas-cola-evidencias). Nunca habilita a dar el punto por hecho.
+  const [syncFoto, setSyncFoto] = useState<SyncFoto>(null)
   // Validación QR de la visita. `qr_verificado` viene del servidor (snapshot de
   // la ejecución); acá sólo vive el estado transitorio del escaneo y la salida
   // explícita "no puedo escanear" para QR obligatorio.
@@ -178,6 +194,8 @@ export default function RondaGuardiaEjecucion({
   const puntoActualId = puntoActual?.ejecucion_punto_id ?? null
   // Momento en que se obtuvo el GPS del punto (para decidir si se reusa tras una recarga).
   const gpsObtenidoMsRef = useRef<number | null>(null)
+  const puntoActualIdRef = useRef<string | null>(puntoActualId)
+  puntoActualIdRef.current = puntoActualId
 
   useEffect(() => {
     setEstadoGps({ tipo: 'sin_solicitar' })
@@ -188,6 +206,9 @@ export default function RondaGuardiaEjecucion({
     // Cambió el punto (o se registró el anterior): la evidencia subida ya no
     // aplica. También cubre volver de la ronda, porque desmonta esta pantalla.
     setEvidenciaSubidaId(null)
+    setSyncFoto(puntoActualId && entradaEnCola(puntoActualId)
+      ? { estado: 'pendiente', mensaje: MENSAJE_SYNC_PENDIENTE_GENERICO }
+      : null)
     setScannerAbierto(false)
     setValidandoQr(false)
     setAvisoQr(null)
@@ -259,6 +280,50 @@ export default function RondaGuardiaEjecucion({
       if (foto?.url) URL.revokeObjectURL(foto.url)
     }
   }, [foto?.url])
+
+  // Cola de fotos pendientes de sincronizar: se procesa al abrir la ronda, al
+  // volver la señal y al volver la app al primer plano (y cada tanto mientras
+  // el punto actual tenga una pendiente). Sólo vincula la evidencia: el punto
+  // se sigue registrando con "Registrar punto".
+  const sincronizarCola = async (forzar = false) => {
+    const resumen = await sincronizarFotosPendientesRonda({ forzar })
+    const id = puntoActualIdRef.current
+    if (!id) return
+    if (resumen.sincronizadas.some(s => s.ejecucion_punto_id === id)) {
+      setEvidenciaSubidaId(id)
+      setSyncFoto({ estado: 'sincronizada' })
+      setError(null)
+      return
+    }
+    const descartada = resumen.descartadas.find(d => d.ejecucion_punto_id === id)
+    if (descartada) {
+      setSyncFoto(null)
+      setError(`No se pudo sincronizar la foto: ${descartada.motivo}`)
+    }
+  }
+  const sincronizarColaRef = useRef(sincronizarCola)
+  sincronizarColaRef.current = sincronizarCola
+
+  useEffect(() => {
+    void sincronizarColaRef.current()
+    const alVolverRed = () => { void sincronizarColaRef.current(true) }
+    const alVolverVisible = () => {
+      if (document.visibilityState === 'visible') void sincronizarColaRef.current()
+    }
+    window.addEventListener('online', alVolverRed)
+    document.addEventListener('visibilitychange', alVolverVisible)
+    return () => {
+      window.removeEventListener('online', alVolverRed)
+      document.removeEventListener('visibilitychange', alVolverVisible)
+    }
+  }, [])
+
+  const syncPendiente = syncFoto?.estado === 'pendiente'
+  useEffect(() => {
+    if (!syncPendiente) return
+    const t = setInterval(() => { void sincronizarColaRef.current() }, INTERVALO_SYNC_FOTO_MS)
+    return () => clearInterval(t)
+  }, [syncPendiente])
 
   // Corta la captura en curso al cambiar de punto o al desmontar: watchPosition
   // sigue vivo hasta que se lo limpia.
@@ -334,6 +399,10 @@ export default function RondaGuardiaEjecucion({
       })
       // Imagen nueva elegida a mano: hay que subir esta, no reutilizar la anterior.
       setEvidenciaSubidaId(null)
+      // La pendiente anterior (otra foto) ya no se sincroniza sola: la próxima
+      // subida es la de esta imagen.
+      if (puntoActualId) quitarDeCola(puntoActualId)
+      setSyncFoto(null)
       // Pendiente hasta que el punto quede registrado.
       if (puntoActualId) {
         void guardarFotoPendiente({ flujo: 'ronda', refId: puntoActualId, tipo: 'punto', archivo: comprimida, nombre: 'punto-ronda.jpg' })
@@ -371,10 +440,17 @@ export default function RondaGuardiaEjecucion({
       if (foto && evidenciaSubidaId !== puntoActual.ejecucion_punto_id) {
         const subida = await subirFotoPuntoRonda(puntoActual.ejecucion_punto_id, foto.file)
         if (subida.error) {
-          setError(subida.error)
+          // Foto guardada y en cola: aviso de "pendiente de sincronizar", no
+          // error. El punto NO se registra hasta que la evidencia esté.
+          if (subida.pendienteSincronizar) {
+            setSyncFoto({ estado: 'pendiente', mensaje: subida.error })
+          } else {
+            setError(subida.error)
+          }
           return
         }
         setEvidenciaSubidaId(puntoActual.ejecucion_punto_id)
+        setSyncFoto({ estado: 'sincronizada' })
       }
 
       const gps = estadoGps.tipo === 'disponible' ? estadoGps.gps : null
@@ -694,7 +770,13 @@ export default function RondaGuardiaEjecucion({
           {foto && (
             <div style={S.fotoPreview}>
               <img src={foto.url} alt="Vista previa del punto de ronda" style={S.fotoImagen} />
-              <div style={S.fotoPie}>Foto lista para subir</div>
+              <div style={S.fotoPie}>
+                {syncFoto?.estado === 'pendiente'
+                  ? 'Foto pendiente de sincronizar'
+                  : syncFoto?.estado === 'sincronizada' || evidenciaSubidaId === puntoActual.ejecucion_punto_id
+                    ? 'Foto sincronizada ✓'
+                    : 'Foto lista para subir'}
+              </div>
             </div>
           )}
 
@@ -712,6 +794,20 @@ export default function RondaGuardiaEjecucion({
             {foto ? 'Repetir foto' : 'Tomar foto'}
           </button>
         </div>
+
+        {syncFoto?.estado === 'pendiente' && (
+          <div style={{ ...S.estadoInfo, ...S.estadoWarn }} role="status" aria-live="polite">
+            <strong>Pendiente de sincronizar</strong>
+            <span>{syncFoto.mensaje}</span>
+            <span>Cuando vuelva la señal tocá «Registrar punto» (o esperá: se reintenta sola).</span>
+          </div>
+        )}
+        {syncFoto?.estado === 'sincronizada' && evidenciaSubidaId === puntoActual.ejecucion_punto_id && !registrando && (
+          <div style={{ ...S.estadoInfo, ...S.estadoOk }} role="status" aria-live="polite">
+            <strong>Foto sincronizada</strong>
+            <span>Tocá «Registrar punto» para completar el punto.</span>
+          </div>
+        )}
 
         {error && <div style={S.errorBox} role="alert">{error}</div>}
 

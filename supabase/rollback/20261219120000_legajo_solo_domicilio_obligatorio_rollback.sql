@@ -1,26 +1,17 @@
--- ============================================================================
--- "Completá tu legajo": OBLIGATORIO SÓLO EL DOMICILIO (JC, 19/11/2026)
--- ============================================================================
--- Antes (20261215100000) se exigían también nacimiento, nacionalidad, contacto
--- de emergencia y obra social. Ahora la pantalla sólo exige:
---   calle, número, localidad, provincia y código postal.
--- El resto se sigue pudiendo cargar desde la misma pantalla, pero no frena.
---
--- mi_legajo_pendiente() agrega 'vacios': datos opcionales que la lectura del
--- DNI con IA puede proponer (fecha y lugar de nacimiento, nacionalidad) si
--- están vacíos. No cuentan para 'pedir'.
---
--- Rollback: supabase/rollback/20261219110000_legajo_solo_domicilio_obligatorio_rollback.sql
--- ============================================================================
-
+-- Rollback de 20261219120000_legajo_solo_domicilio_obligatorio.sql
+-- Vuelve a exigir los 12 datos de 20261215100000 (con el arreglo del DNI cargado por Administración).
 begin;
 
+-- Campos que el vigilador tiene que tener cargados.
 create or replace function public.legajo_campos_obligatorios_vigilador()
 returns text[]
 language sql
 immutable
 as $$
-  select array['domicilio_calle', 'domicilio_numero', 'domicilio_localidad', 'domicilio_provincia', 'domicilio_cp']
+  select array['fecha_nacimiento', 'lugar_nacimiento', 'nacionalidad',
+               'domicilio_calle', 'domicilio_numero', 'domicilio_localidad', 'domicilio_provincia', 'domicilio_cp',
+               'contacto_emergencia_nombre', 'contacto_emergencia_vinculo', 'contacto_emergencia_telefono',
+               'obra_social_nombre']
 $$;
 
 create or replace function public.mi_legajo_pendiente()
@@ -36,7 +27,6 @@ declare
   d jsonb;
   k text;
   v_faltan text[] := '{}';
-  v_vacios text[] := '{}';
   v_por_confirmar integer;
   v_dni boolean;
   v_dni_rechazo text;
@@ -53,16 +43,12 @@ begin
   end if;
 
   d := coalesce((select to_jsonb(l) from public.legajo_datos_personales l where l.empleado_id = u.id), '{}'::jsonb);
-  foreach k in array public.legajo_campos_obligatorios_vigilador() || array['fecha_nacimiento', 'lugar_nacimiento', 'nacionalidad'] loop
+  foreach k in array public.legajo_campos_obligatorios_vigilador() loop
     if nullif(btrim(coalesce(d ->> k, '')), '') is null
        and not exists (select 1 from public.legajo_cambios_datos c
                         where c.empleado_id = u.id and c.campo = k and c.estado = 'pendiente'
                           and nullif(btrim(coalesce(c.valor_nuevo, '')), '') is not null) then
-      if k = any (public.legajo_campos_obligatorios_vigilador()) then
-        v_faltan := v_faltan || k;
-      else
-        v_vacios := v_vacios || k;
-      end if;
+      v_faltan := v_faltan || k;
     end if;
   end loop;
 
@@ -83,7 +69,6 @@ begin
   return jsonb_build_object(
     'pedir', cardinality(v_faltan) > 0 or v_por_confirmar > 0 or not v_dni or not v_cred or e.validado_at is null,
     'faltan', to_jsonb(v_faltan),
-    'vacios', to_jsonb(v_vacios),
     'por_confirmar', v_por_confirmar,
     'dni', v_dni,
     'dni_rechazo', v_dni_rechazo,
@@ -93,8 +78,5 @@ begin
     'puede_posponer', coalesce(e.pospuesto, 0) < 3);
 end;
 $$;
-
-revoke all on function public.mi_legajo_pendiente() from public, anon;
-grant execute on function public.mi_legajo_pendiente() to authenticated;
 
 commit;

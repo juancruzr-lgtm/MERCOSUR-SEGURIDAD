@@ -96,3 +96,40 @@ export async function cargarTurnosDelPeriodo<T = any>(
       .range(desde, hasta))
   return res.error ? { data: [], error: `turnos: ${mensaje(res.error)}` } : { data: res.data, error: null }
 }
+
+type FilaRankingMes = {
+  id: string
+  objetivo_id?: string | null
+  supervisor_id?: string | null
+  estado?: string | null
+  created_at?: string | null
+}
+
+/**
+ * Las supervisiones del mes en curso para el ranking del panel, derivadas de
+ * la carga de detalle (que ya cubre mes anterior + actual, paginada y con el
+ * mismo orden created_at desc, id desc). Evita una segunda consulta a
+ * `supervisiones` sólo con 5 columnas: la ventana del mes es un subconjunto
+ * exacto de la del detalle, y el filtro de respuestas observadas del detalle
+ * filtra el embed, no las visitas.
+ *
+ * `desde`/`hastaExclusivo` son instantes ISO (inicio del mes argentino y del
+ * siguiente). Se compara por instante, no por texto: PostgREST devuelve
+ * `+00:00` y los límites vienen con `Z`.
+ */
+export function supervisionesMesDesdeDetalle<T extends FilaRankingMes>(
+  detalle: readonly T[],
+  desde: string,
+  hastaExclusivo: string,
+): Array<Pick<T, 'id' | 'objetivo_id' | 'supervisor_id' | 'estado' | 'created_at'>> {
+  const d = Date.parse(desde)
+  const h = Date.parse(hastaExclusivo)
+  const salida: Array<Pick<T, 'id' | 'objetivo_id' | 'supervisor_id' | 'estado' | 'created_at'>> = []
+  for (const s of detalle) {
+    if (!s.created_at) continue
+    const t = Date.parse(s.created_at)
+    if (!(t >= d && t < h)) continue
+    salida.push({ id: s.id, objetivo_id: s.objetivo_id, supervisor_id: s.supervisor_id, estado: s.estado, created_at: s.created_at } as Pick<T, 'id' | 'objetivo_id' | 'supervisor_id' | 'estado' | 'created_at'>)
+  }
+  return salida
+}
