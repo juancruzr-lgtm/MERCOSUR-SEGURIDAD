@@ -523,3 +523,127 @@ describe('Cerrar turno: precarga completa y advertencia (sólo interfaz)', () =>
     })
   })
 })
+
+// ── Permisos de supervisión sobre asistencias (20261221120000, sólo permisos) ──
+// La migración se aplica dentro de cada transacción: el resto del archivo sigue probando
+// las funciones tal cual están en producción.
+const MIG_PERMISOS = join(__dirname, '..', '..', 'supabase', 'migrations', '20261221120000_asistencia_jefatura_y_auditoria_por_alcance.sql')
+const ROLLBACK_PERMISOS = join(__dirname, '..', '..', 'supabase', 'rollback', '20261221120000_asistencia_jefatura_y_auditoria_por_alcance_rollback.sql')
+async function turnoSur(fecha = '2026-11-10') {
+  const id = `5b000000-0000-4000-8000-${String(++nTurno).padStart(12, '0')}`
+  await e.q(`insert into turnos (id, guardia_id, objetivo_id, puesto_id, fecha, hora_inicio, hora_fin, estado, publicado)
+             values ($1,$2,$3,'40000000-0000-4000-8000-000000000002',$4,'08:00','20:00','programado',true)`, [id, P.vigiladorSur.id, OBJETIVO.sur, fecha])
+  return id
+}
+const leeHistorial = async (p: any, turnoId: string) =>
+  (await como<any>(p, `select count(*)::int n from registros_asistencia_auditoria where turno_id = $1`, [turnoId])).rows[0].n > 0
+const tramo12 = (g: string) => JSON.stringify([{ guardia_id: g, hora_inicio: '08:00', hora_fin: '20:00' }])
+const cargaManual = async (p: any, t: string, g: string = P.vigilador.id) =>
+  (await como<any>(p, `select registrar_cobertura($1,$2,'carga_supervisor','08:00','20:00',null,'Carga del supervisor') id`, [t, g])).rows[0].id as string
+const puede = async (p: any, fn: () => Promise<unknown>) => (await e.comoUsuario(p, () => e.intentar(fn))) === null
+
+/** Qué puede hacer cada perfil sobre asistencias (procedimientos reales). */
+async function matrizPermisos() {
+  const out: Record<string, Record<string, boolean>> = {}
+  let k = 0
+  const d = (n: number) => `2026-11-${String(4 + k * 8 + n).padStart(2, '0')}`
+  const perfiles = [['supervisorZona', P.supervisor], ['jefe', P.jefe], ['administracion', P.administracion]] as const
+  for (const [nombre, p] of perfiles) {
+    const f: Record<string, boolean> = {}
+    const t1 = await turno(d(0), '08:00', '20:00')
+    const { rows: [r1] } = await ingresoVigilador(t1, '08:00')
+    await egresoVigilador(r1.id, '20:00', 12)
+    f.corregir = await puede(p, () => corregir(p, r1.id, { hora_salida_final: '19:00' }, 'Se retiró antes'))
+    const t2 = await turno(d(1), '08:00', '20:00')
+    f.cobertura = await puede(p, () => cargaManual(p, t2))
+    const ts = await turnoSur(d(2))
+    f.coberturaOtraZona = await puede(p, () => cargaManual(p, ts, P.vigiladorSur.id))
+    const t3 = await turno(d(3), '08:00', '20:00')
+    f.cerrarTurno = await puede(p, () => como(p, `select cerrar_turno($1,$2::jsonb,'Relevo')`, [t3, tramo12(P.vigilador.id)]))
+    const t4 = await turno(d(4), '08:00', '20:00')
+    await como(P.supervisor, `select cerrar_turno($1,$2::jsonb,'Primer cierre')`, [t4, tramo12(P.vigilador.id)])
+    f.volverACerrar = await puede(p, () => como(p, `select cerrar_turno($1,$2::jsonb,'Corrección del relevo')`, [t4, tramo12(P.vigiladorSur.id)]))
+    const reg = await cargaManual(P.supervisor, await turno(d(5), '08:00', '20:00'))
+    f.anularCargaManual = await puede(p, () => como(p, `select anular_registro_manual($1,'Cargada en el turno equivocado')`, [reg]))
+    f.historialSuZona = await leeHistorial(p, t1)
+    const ts2 = await turnoSur(d(6))
+    await cargaManual(P.administracion, ts2, P.vigiladorSur.id)
+    f.historialOtraZona = await leeHistorial(p, ts2)
+    out[nombre] = f
+    k++
+  }
+  const tv = await turno('2026-11-28', '08:00', '20:00')
+  await cargaManual(P.supervisor, tv)
+  out.vigilador = { historial: await leeHistorial(P.vigilador, tv) }
+  return out
+}
+
+describe('Permisos de supervisión sobre asistencias', () => {
+  it('HOY: supervisor de zona corrige/carga/cierra en su zona; la jefatura (rol legado supervisor) no vuelve a cerrar, no anula y nadie salvo Administración ve el historial', async () => {
+    await e.enTransaccion(async () => {
+      const m = await matrizPermisos()
+      expect(m.supervisorZona).toEqual({ corregir: true, cobertura: true, coberturaOtraZona: false, cerrarTurno: true, volverACerrar: false, anularCargaManual: false, historialSuZona: false, historialOtraZona: false })
+      expect(m.jefe).toEqual({ corregir: true, cobertura: true, coberturaOtraZona: true, cerrarTurno: true, volverACerrar: false, anularCargaManual: false, historialSuZona: false, historialOtraZona: false })
+      expect(m.administracion).toEqual({ corregir: true, cobertura: true, coberturaOtraZona: true, cerrarTurno: true, volverACerrar: true, anularCargaManual: true, historialSuZona: true, historialOtraZona: true })
+      expect(m.vigilador).toEqual({ historial: false })
+    })
+  })
+  it('CON LA CORRECCIÓN: la jefatura vuelve a cerrar y anula; el supervisor ve el historial sólo de su zona; lo demás igual', async () => {
+    await e.enTransaccion(async () => {
+      await e.aplicarArchivo(MIG_PERMISOS)
+      const m = await matrizPermisos()
+      expect(m.supervisorZona).toEqual({ corregir: true, cobertura: true, coberturaOtraZona: false, cerrarTurno: true, volverACerrar: false, anularCargaManual: false, historialSuZona: true, historialOtraZona: false })
+      expect(m.jefe).toEqual({ corregir: true, cobertura: true, coberturaOtraZona: true, cerrarTurno: true, volverACerrar: true, anularCargaManual: true, historialSuZona: true, historialOtraZona: true })
+      expect(m.administracion).toEqual({ corregir: true, cobertura: true, coberturaOtraZona: true, cerrarTurno: true, volverACerrar: true, anularCargaManual: true, historialSuZona: true, historialOtraZona: true })
+      expect(m.vigilador).toEqual({ historial: false })
+    })
+  })
+  it('las horas no cambian: lo que hace la jefatura da lo mismo que si lo hace Administración; fichaje y auditoría se conservan', async () => {
+    const correr = async (p: any) => {
+      let out: any
+      await e.enTransaccion(async () => {
+        await e.aplicarArchivo(MIG_PERMISOS)
+        const t = await turno('2026-11-10', '08:00', '20:00')
+        const { rows: [r] } = await ingresoVigilador(t, '08:00')
+        await egresoVigilador(r.id, '14:00', 6)
+        await como(P.supervisor, `select cerrar_turno($1,$2::jsonb,'Primer cierre')`, [t, JSON.stringify([{ guardia_id: P.vigilador.id, hora_inicio: '08:00', hora_fin: '14:00' }])])
+        await como(p, `select cerrar_turno($1,$2::jsonb,'Se agrega el relevo')`, [t, JSON.stringify([
+          { guardia_id: P.vigilador.id, hora_inicio: '08:00', hora_fin: '14:00' }, { guardia_id: P.vigiladorSur.id, hora_inicio: '14:00', hora_fin: '20:00' }])])
+        const t2 = await turno('2026-11-11', '08:00', '20:00')
+        const reg = await cargaManual(P.supervisor, t2)
+        await como(p, `select anular_registro_manual($1,'Cargada en el turno equivocado')`, [reg])
+        const [a] = await registros(t2)
+        const orig = (await registros(t)).find((x: any) => x.id === r.id)
+        out = {
+          liq: await horasLiquidacion(t), fact: await horasFacturacion([t]),
+          fichajeOriginal: [s(orig.hora_entrada_real), s(orig.hora_salida_real)],
+          anulado: [a.id === reg, a.registro_anulado_at != null, Number(a.horas_liquidables)],
+          auditoria: (await auditoria(t2)).map((x: any) => x.campo).sort(),
+        }
+      })
+      return out
+    }
+    const jefe = await correr(P.jefe)
+    expect(jefe).toEqual(await correr(P.administracion))
+    expect(jefe.liq).toEqual({ [P.vigilador.id]: 6, [P.vigiladorSur.id]: 6 })
+    expect(jefe.fact).toEqual({ cubiertos: 12, descubiertos: 0 })
+    expect(jefe.fichajeOriginal).toEqual(['08:00', '14:00'])
+    expect(jefe.anulado).toEqual([true, true, 0])
+    expect(jefe.auditoria).toEqual(expect.arrayContaining(['registro_anulado', 'horas_liquidables']))
+  })
+  it('no se aplica sobre un cuerpo distinto del esperado, y el rollback deja las funciones como hoy', async () => {
+    await e.enTransaccion(async () => {
+      await e.aplicarArchivo(MIG_PERMISOS)
+      expect(await e.intentar(() => e.aplicarArchivo(MIG_PERMISOS))).not.toBeNull()
+    })
+    await e.enTransaccion(async () => {
+      const antes = { c: await md5('cerrar_turno'), a: await md5('anular_registro_manual') }
+      await e.aplicarArchivo(MIG_PERMISOS)
+      expect(await md5('cerrar_turno')).not.toBe(antes.c)
+      expect(await md5('anular_registro_manual')).not.toBe(antes.a)
+      await e.aplicarArchivo(ROLLBACK_PERMISOS)
+      expect({ c: await md5('cerrar_turno'), a: await md5('anular_registro_manual') }).toEqual(antes)
+      expect((await e.q<any>(`select count(*)::int n from pg_policies where policyname = 'registros_asistencia_auditoria_select_alcance'`)).rows[0].n).toBe(0)
+    })
+  })
+})
