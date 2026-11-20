@@ -54,7 +54,10 @@ describe('usuarios sin CBU desde el navegador (V2)', () => {
       return x ? x[1].split(',') : []
     })
     const enMigracion = [...m![1].split(','), ...posteriores].map(c => c.trim()).sort()
-    expect(enMigracion).toEqual(COLUMNAS_USUARIO.split(',').map(c => c.trim()).sort())
+    // dni y cuil siguen concedidas hasta la fase B de F-06, pero el cliente ya no
+    // las pide: salen de usuarios_datos_identidad (tests/usuarios-identidad-rpc.test.ts).
+    expect(enMigracion).toEqual(expect.arrayContaining(['dni', 'cuil']))
+    expect(enMigracion.filter(c => c !== 'dni' && c !== 'cuil')).toEqual(COLUMNAS_USUARIO.split(',').map(c => c.trim()).sort())
     expect(enMigracion).not.toContain('cuenta_bancaria')
   })
 

@@ -16,6 +16,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { cargarDatosIdentidad } from '@/lib/usuarios-columnas'
 import {
   accesoDeEmpleado, adjuntarDocumento, anularBaja, anularVacaciones, bajasDeEmpleado, cargarCausas, cargarTiposDocumentoBaja,
   confirmarBaja, documentosDeBaja, estadoLiquidacionDeBaja, guardarBorrador, historialDeBaja, leerDocumentoConIA,
@@ -43,13 +44,16 @@ export interface IdentificacionEmpleado {
 }
 
 async function identificacion(empleadoId: string): Promise<IdentificacionEmpleado | null> {
-  const [{ data: u }, { data: l }] = await Promise.all([
-    supabase.from('usuarios').select('id, nombre, apellido, dni, cuil, legajo, legajo_visual, estado').eq('id', empleadoId).maybeSingle(),
+  // DNI/CUIL por RPC con permiso (F-06), no por la tabla.
+  const [{ data: u }, { data: l }, ident] = await Promise.all([
+    supabase.from('usuarios').select('id, nombre, apellido, legajo, legajo_visual, estado').eq('id', empleadoId).maybeSingle(),
     supabase.from('legajo_datos_personales').select('fecha_ingreso').eq('empleado_id', empleadoId).maybeSingle(),
+    cargarDatosIdentidad(supabase, [empleadoId]),
   ])
   if (!u) return null
   const x = u as any
-  return { id: x.id, nombre: `${x.apellido ?? ''}, ${x.nombre ?? ''}`, dni: x.dni ?? null, cuil: x.cuil ?? null, legajo: x.legajo_visual ?? x.legajo ?? null, fechaIngreso: (l as any)?.fecha_ingreso ?? null, estado: x.estado ?? null }
+  const doc = ident.porId.get(empleadoId)
+  return { id: x.id, nombre: `${x.apellido ?? ''}, ${x.nombre ?? ''}`, dni: doc?.dni ?? null, cuil: doc?.cuil ?? null, legajo: x.legajo_visual ?? x.legajo ?? null, fechaIngreso: (l as any)?.fecha_ingreso ?? null, estado: x.estado ?? null }
 }
 
 export default function RegistrarBaja({ empleadoId, origen, puedeGerencia = false, onCerrar, onCambio }: {
