@@ -46,7 +46,7 @@ describe('cableado (sobre el código fuente)', () => {
   it('menú, horarios y ranking usan el mismo permiso (la lista de la base)', () => {
     expect(app).toContain("const veLegajoSupervisores = useAccesoLegajoSupervisores(user)")
     // El menú (lib/menu-admin-nav) recibe el mismo permiso y lo usa tal cual.
-    expect(app).toMatch(/construirNavAdmin\(\{[\s\S]*?\n\s+veLegajoSupervisores,\n[\s\S]*?\}\)/)
+    expect(app).toMatch(/construirNavAdmin\(\{[\s\S]*?\n\s+veLegajoSupervisores,\r?\n[\s\S]*?\}\)/)
     const ev = ITEMS_MENU_ADMIN.find(i => i.id === 'evaluacion_supervisores')!
     const todo = { supervisarZona: true, supervisarTodasZonas: true, verDashboardGerencial: true, gestionarPersonal: true,
       prepararLiquidacion: true, gestionarFacturacion: true, gestionaDatosSensibles: true, esAdminPleno: true,
