@@ -47,6 +47,7 @@ import {
 } from '@/lib/rondas'
 import { formatHora24, formatFechaHora } from '@/lib/formato'
 import { useVigenciaCarga } from '@/lib/vigencia-carga'
+import { rondaRelevante, ultimaHecha, proximaAt, horaHecha } from '@/lib/rondas-panel'
 
 export interface ObjetivoControlRondas {
   id: string
@@ -108,17 +109,6 @@ function ms(iso: string): number {
  * así que el huso del navegador no puede correr el corte. Solo afecta cómo se
  * escribe la hora en pantalla, no qué ronda se elige.
  */
-function rondaRelevante(rondas: RondaProgramada[]): RondaProgramada | null {
-  const ahora = Date.now()
-  let mejor: RondaProgramada | null = null
-
-  for (const r of rondas) {
-    if (ms(r.vencimiento_at) > ahora) continue
-    if (mejor === null || ms(r.vencimiento_at) > ms(mejor.vencimiento_at)) mejor = r
-  }
-
-  return mejor
-}
 
 // 24 h vía lib/formato.ts. `toLocaleTimeString('es-AR')` sin `hour12` devuelve
 // "10:45 p. m." en los runtimes con ICU reciente, y en una operación con turnos
@@ -230,7 +220,12 @@ async function enTandas<T, R>(items: T[], tam: number, fn: (item: T) => Promise<
 interface Fila {
   objetivoId: string
   ronda: RondaProgramada
+  /** Última ronda que el vigilador hizo (o está haciendo), ayer u hoy. */
+  ultimaHecha: RondaProgramada | null
+  /** Inicio de la próxima ventana que todavía no empezó. */
+  proximaAt: string | null
 }
+
 
 /** Cómo terminó el fan-out completo. Se muestra al pie del panel. */
 interface Balance {
@@ -290,7 +285,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCam
       }
       const ronda = rondaRelevante(r.rondas)
       if (!ronda) { nuevoBalance.sinRondas++; continue }
-      nuevas.push({ objetivoId: r.id, ronda })
+      nuevas.push({ objetivoId: r.id, ronda, ultimaHecha: ultimaHecha(r.rondas), proximaAt: proximaAt(r.rondas) })
     }
 
     // Orden operativo único de lib/rondas.ts. En este carril entran solo rondas
@@ -398,7 +393,7 @@ export default function ControlDeRondasPanel({ objetivos, onVerTodas, onPausaCam
         <div style={S.pie}>
           {[
             `${filas.length}/${balance.llamadas} objetivo(s)`,
-            balance.sinRondas > 0 ? `${balance.sinRondas} sin rondas finalizadas` : null,
+            balance.sinRondas > 0 ? `${balance.sinRondas} sin rondas para ayer u hoy (sin ronda cargada o sin turno)` : null,
             balance.sinPermiso > 0 ? `${balance.sinPermiso} fuera de tu alcance` : null,
             balance.errores > 0 ? `${balance.errores} no respondió` : null,
           ].filter(Boolean).join(' · ')}
@@ -503,6 +498,20 @@ function TarjetaObjetivo({
         </span>
         <span style={{ ...S.estadoTexto, color }}>
           {ICONO_ESTADO_TECNICO[tecnico]} {ETIQUETA_CORTA_ESTADO_TECNICO[tecnico]}
+        </span>
+        <span style={S.lineaExtra}>
+          {(() => {
+            const u = fila.ultimaHecha
+            const t = u ? horaHecha(u) : null
+            if (!u || !t) return 'Última: sin rondas hechas'
+            const est = estadoTecnicoRonda(u)
+            return <>Última: {esDeHoy(t) ? '' : `${diaMes(t)} `}{hora(t)} · <span style={{ color: COLOR_ESTADO_TECNICO[est] }}>{ICONO_ESTADO_TECNICO[est]} {ETIQUETA_CORTA_ESTADO_TECNICO[est]}</span></>
+          })()}
+        </span>
+        <span style={S.lineaExtra}>
+          {fila.proximaAt
+            ? `Próxima: ${esDeHoy(fila.proximaAt) ? '' : `${diaMes(fila.proximaAt)} `}${hora(fila.proximaAt)}`
+            : 'Próxima: sin turno cargado'}
         </span>
         <span style={{ ...S.pieTarjeta, ...(pieDestacado ? S.pieAlerta : null) }}>
           {pie ?? ' '}
@@ -798,6 +807,7 @@ const S: Record<string, React.CSSProperties> = {
     borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap',
   },
   estadoTexto: { fontSize: 12, fontWeight: 800, whiteSpace: 'nowrap' },
+  lineaExtra: { fontSize: 11, color: '#cbd5e1', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   pieTarjeta: {
     fontSize: 11, color: '#64748b', minHeight: 15,
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
