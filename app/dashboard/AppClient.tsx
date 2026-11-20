@@ -1666,33 +1666,34 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     }
   }
 
-  useEffect(() => {
-    let activo = true
-
-    const sincronizarEmailsAuth = async () => {
-      try {
-        const res = await fetch('/api/sync-auth-emails', {
-          method: 'POST',
-          headers: await headersAdmin(),
-        })
-        const data = await res.json()
-
-        if (res.ok && activo && Array.isArray(data.users)) {
+  // Sincronizar usuarios.email con el email de Auth. Antes corría sola cada vez que se abría
+  // Guardias (≈100 consultas a Auth, 16 s, y podía reescribir emails sin que nadie lo pidiera: F-14).
+  // Ahora es una acción explícita de herramientas técnicas (botón «Sincronizar emails Auth»).
+  const puedeSincronizarEmails = tieneCapacidad(user, 'configurar_sistema')
+  const sincronizarEmailsAuth = async () => {
+    setAccionLoading('sync-emails')
+    setMensaje(null)
+    try {
+      const res = await fetch('/api/sync-auth-emails', {
+        method: 'POST',
+        headers: await headersAdmin(),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setMensaje({ tipo:'error', texto:data.error || 'No se pudieron sincronizar los emails de Auth' })
+      } else {
+        if (Array.isArray(data.users)) {
           // Respuesta con pocas columnas: se fusiona, nunca reemplaza la fila completa.
           const actualizados = new Map<string, any>(data.users.map((u: Usuario) => [u.id, u]))
           setGuardias((prev: Usuario[]) => prev.map(g => actualizados.has(g.id) ? fusionarFila(g as any, actualizados.get(g.id)) as Usuario : g))
         }
-      } catch {
-        // La grilla sigue operativa aunque la sincronización técnica no responda.
+        setMensaje({ tipo:'ok', texto:data.message || 'Emails de Auth sincronizados.' })
       }
+    } catch (error) {
+      setMensaje({ tipo:'error', texto:error instanceof Error ? error.message : 'Error de conexión' })
     }
-
-    sincronizarEmailsAuth()
-
-    return () => {
-      activo = false
-    }
-  }, [])
+    setAccionLoading(null)
+  }
 
   const guardar = async () => {
     setMensaje(null)
@@ -2193,6 +2194,17 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
           >
             {accionLoading === 'repair-auth' ? 'Reparando...' : 'Reparar accesos Auth'}
           </button>
+
+          {puedeSincronizarEmails && (
+          <button
+            style={{ ...S.btn, ...S.btnSecondary, opacity: accionLoading === 'sync-emails' ? 0.65 : 1 }}
+            onClick={sincronizarEmailsAuth}
+            disabled={accionLoading === 'sync-emails'}
+            title="Copia a la ficha del empleado el email con el que entra (Auth) cuando difieren"
+          >
+            {accionLoading === 'sync-emails' ? 'Sincronizando...' : 'Sincronizar emails Auth'}
+          </button>
+          )}
 
           {(puedePleno || puedeOperativo) && (
           <button
