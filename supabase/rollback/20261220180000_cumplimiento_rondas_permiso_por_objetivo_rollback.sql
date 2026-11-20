@@ -1,4 +1,4 @@
--- ROLLBACK de 20261220093000_cumplimiento_rondas_permiso_por_objetivo (F-15).
+-- ROLLBACK de 20261220180000_cumplimiento_rondas_permiso_por_objetivo (F-15).
 -- Definición viva en producción al 20/11/2026 antes de aplicar (md5 de pg_get_functiondef: c4d2e2e843a4889a79c93cb93dc8b735).
 -- Ejecutar sólo si la versión nueva diera resultados distintos. CREATE OR REPLACE conserva los GRANT.
 
