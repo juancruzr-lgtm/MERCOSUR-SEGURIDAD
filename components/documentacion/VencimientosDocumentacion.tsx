@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { fechaCorta, fechaHora } from '@/lib/documentacion'
-import { cargarVencimientos, configurarAlertas, textoDias } from '@/lib/documentacion-alertas'
+import { cargarVencimientos, claveVencimiento, configurarAlertas, textoDias, textoResumenAlertas } from '@/lib/documentacion-alertas'
 import type { ConfigAlertas, ReporteVencimientos } from '@/lib/documentacion-alertas'
 
 const card: React.CSSProperties = { background: '#111827', border: '1px solid #1e2d42', borderRadius: 10, padding: 14, marginBottom: 10, minWidth: 0, boxSizing: 'border-box' }
@@ -68,6 +68,7 @@ export default function VencimientosDocumentacion() {
   if (error) return <div style={{ ...card, color: '#fca5a5' }}>{error}</div>
   if (!datos) return <div style={{ color: '#64748b', padding: 24 }}>Cargando…</div>
   const vencidos = datos.documentos.filter(d => d.dias < 0).length
+  const resumen = textoResumenAlertas(datos.alertas, datos.config.activo)
 
   return (
     <>
@@ -76,6 +77,7 @@ export default function VencimientosDocumentacion() {
         : <div style={{ fontSize: 12.5, color: '#94a3b8', margin: '0 2px 10px' }}>
             Alertas automáticas: <b style={{ color: datos.config.activo ? '#86efac' : '#94a3b8' }}>{datos.config.activo ? 'prendidas' : 'apagadas'}</b> (las maneja Gerencia).
           </div>}
+      {resumen && <div style={{ fontSize: 12.5, color: '#94a3b8', margin: '0 2px 10px' }}>{resumen}</div>}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
         <span style={{ fontSize: 13, color: '#94a3b8' }}>Vencidos y por vencer en:</span>
         {[15, 30, 60, 90].map(n => <button key={n} type="button" style={chip(dias === n)} onClick={() => setDias(n)}>{n} días</button>)}
@@ -83,7 +85,7 @@ export default function VencimientosDocumentacion() {
       {datos.documentos.length === 0 && <div style={{ ...card, color: '#94a3b8' }}>Nada vence en los próximos {datos.dias} días.</div>}
       {vencidos > 0 && <div style={{ fontSize: 13, color: '#fca5a5', margin: '0 2px 8px' }}>{vencidos} vencido{vencidos > 1 ? 's' : ''}.</div>}
       {datos.documentos.map(d => (
-        <div key={d.documento_id} style={{ ...card, padding: '10px 12px', borderColor: d.dias < 0 ? 'rgba(239,68,68,.4)' : '#1e2d42' }}>
+        <div key={claveVencimiento(d)} style={{ ...card, padding: '10px 12px', borderColor: d.dias < 0 ? 'rgba(239,68,68,.4)' : '#1e2d42' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
             <a href={`/guardias/${d.empleado_id}?seccion=documentacion`} style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 14, overflowWrap: 'anywhere' }}>
               {d.apellido}, {d.nombre}
@@ -92,7 +94,8 @@ export default function VencimientosDocumentacion() {
           </div>
           <div style={{ fontSize: 13, color: '#cbd5e1', marginTop: 2 }}>
             {d.tipo_nombre}{d.detalle ? ` · ${d.detalle}` : ''} · {fechaCorta(d.vence_el)}
-            {d.reemplazo_en_curso && <span style={{ color: '#93c5fd' }}> · ya hay uno nuevo en trámite</span>}
+            {d.verificada === false && <span style={{ color: '#94a3b8' }}> · informada, sin verificar</span>}
+            {d.reemplazo_en_curso && <span style={{ color: '#93c5fd' }}> · {d.origen === 'credencial' ? 'renovación en trámite' : 'ya hay uno nuevo en trámite'}</span>}
           </div>
         </div>
       ))}
