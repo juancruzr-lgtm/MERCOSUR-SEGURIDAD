@@ -1,5 +1,7 @@
 // La sección Facturación abre en el último mes vencido (hora de Argentina) y muestra el período
 // en una barra fija por encima de las pestañas, la misma para todas.
+// Desde d5a5f75 el panel completo (pestañas + barra) exige la capacidad facturacion_completa
+// (Gerencia, o Administración con acceso_facturacion); sin ella sólo se consultan comprobantes.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
@@ -22,11 +24,12 @@ vi.mock('@/components/facturacion/Vencimientos', () => marca('vencimientos'))
 
 describe('Facturación abre en el mes vencido', () => {
   afterEach(() => vi.useRealTimers())
-  const abrir = async (instante: string) => {
+  const GERENCIA = { id: 'u', puesto_organizacional: 'gerencia' }
+  const abrir = async (instante: string, user: any = GERENCIA) => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(instante))
     vi.resetModules()
     const { default: Panel } = await import('@/components/facturacion/FacturacionPanel')
-    return renderToString(createElement(Panel, { user: { id: 'u' } })).replace(/<!-- -->/g, '')
+    return renderToString(createElement(Panel, { user })).replace(/<!-- -->/g, '')
   }
 
   it('en noviembre de 2026 abre OCTUBRE 2026 como período vencido, con Aceptar habilitado', async () => {
@@ -50,6 +53,20 @@ describe('Facturación abre en el mes vencido', () => {
     expect(barra).toBeLessThan(pestanas)
     expect(pestanas).toBeLessThan(contenido)
     expect(html).toContain('position:sticky')
+  })
+  it('Administración con acceso_facturacion ve el panel completo', async () => {
+    const html = await abrir('2026-11-04T15:00:00Z', { id: 'a', puesto_organizacional: 'administracion', acceso_facturacion: true })
+    expect(html).toContain('data-testid="barra-periodo"')
+    expect(html).toContain('bandeja:2026-10:escribe')
+  })
+  it('sin facturacion_completa sólo consulta comprobantes: sin barra de período ni pestañas', async () => {
+    for (const user of [{ id: 'u' }, { id: 'a', puesto_organizacional: 'administracion' }]) {
+      const html = await abrir('2026-11-04T15:00:00Z', user)
+      expect(html).toContain('Facturación · Comprobantes')
+      expect(html).not.toContain('data-testid="barra-periodo"')
+      expect(html).not.toContain('>Prefacturas<')
+      expect(html).toContain('data-tab="comprobantes"')
+    }
   })
 })
 

@@ -4,6 +4,13 @@ Foto al **2026-11-04** · main `b79d32d` · proyecto `rngdjslzfcjtepgzmzrs` · v
 
 > **Sólo documentación.** Nada de esto se ejecutó. Para normalizar el historial ver [PROCEDIMIENTO-NORMALIZACION.md](./PROCEDIMIENTO-NORMALIZACION.md). **Nunca correr `supabase db push` contra producción** hasta terminar ese procedimiento.
 
+## Actualización 20/11/2026
+
+- Se sumaron al mapa los **33 archivos** `20261208100000` … `20261219120000` (antes "nuevos"), clasificados con `list_migrations` (MCP, sólo lectura, 114 filas) y la verificación de objetos de la auditoría 19-20/11: 19 `REGISTRADA_OTRA_VERSION`, 12 `APLICADA_A_MANO_SIN_REGISTRO` y 2 `FALTA_REALMENTE` (`20261215120000_gestion_casos_tablero` y `20261216120000_gestion_documental_administracion`, 0 objetos en producción).
+- **Versión duplicada resuelta:** `20261219110000` estaba en dos archivos. `facturacion_licitaciones_horas` conserva el número; `legajo_solo_domicilio_obligatorio` (y su rollback) pasa a **`20261219120000`**. En producción figuran como `20261119125303` y `20261120015502`: no se renombraron a esas versiones porque la serie del repo está corrida a diciembre y con el número real un `db reset` las correría antes de `20261201120000_facturacion_base` y `20261215100000_completar_legajo_vigilador`, de las que dependen. Quedan como `REGISTRADA_OTRA_VERSION`, igual que el resto.
+- Quedan 2 filas remotas sin archivo: `20261112173824 anular_fichaje_gps` y `20261118160236 completar_legajo_dni_cualquier_estado` (`remoto_sin_archivo`).
+- Piso nuevo: **`20261219120000`**.
+
 ## Actualización 10/11/2026
 
 - Con la CLI oficial y el login de Juan Cruz se registraron con `migration repair --status applied` las **11 versiones** posteriores a esta foto: `20261204120000`, `20261205100000`, `20261205100100`, `20261205100200`, `20261205120000`, `20261205120100`, `20261205120200`, `20261206100000`, `20261206120000`, `20261207100000`, `20261207100100`. Las 10 primeras se registraron juntas y `20261207100100` aparte, después de aplicar y verificar la etapa B de #381.
@@ -25,7 +32,7 @@ Foto al **2026-11-04** · main `b79d32d` · proyecto `rngdjslzfcjtepgzmzrs` · v
 | `FALTA_REALMENTE` | 1 | Su contenido NO está en la base. No registrar. |
 | `OBSOLETA_BORRADOR` | 5 | Borrador, obsoleta, sin efecto o rollback mal ubicado. Ver nota de cada una. |
 
-Piso actual (última versión del mapa): **`20261207100100`**. Toda migración nueva debe tener un número mayor (lo controla `npm run migraciones:guard`).
+Piso actual (última versión del mapa): **`20261219120000`** (20/11; era `20261207100100`). Toda migración nueva debe tener un número mayor (lo controla `npm run migraciones:guard`).
 
 ## Criterio
 

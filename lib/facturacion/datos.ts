@@ -14,12 +14,14 @@ async function encabezadoSesion(): Promise<Record<string, string>> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-export async function api<T = any>(ruta: string, cuerpo?: unknown, metodo = 'POST'): Promise<T> {
+export async function api<T = any>(ruta: string, cuerpo?: unknown, metodo = 'POST', opciones: { signal?: AbortSignal } = {}): Promise<T> {
   const esForm = typeof FormData !== 'undefined' && cuerpo instanceof FormData
   const resp = await fetch(`/api/facturacion/${ruta}`, {
     method: metodo,
     headers: { ...(esForm ? {} : { 'Content-Type': 'application/json' }), ...(await encabezadoSesion()) },
     body: metodo === 'GET' ? undefined : esForm ? (cuerpo as FormData) : JSON.stringify(cuerpo ?? {}),
+    // Para cancelar cálculos largos al salir de la pantalla (p. ej. propuestas de horas).
+    signal: opciones.signal,
   })
   const json = await resp.json().catch(() => ({}))
   if (!resp.ok) {

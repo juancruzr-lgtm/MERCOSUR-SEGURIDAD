@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { SIN_CACHE, clientesDelPedido } from '@/app/api/documentacion/_clientes'
 import { bloquearAccesoAuth, desbloquearAccesoAuth } from '@/app/api/_lib/employee-auth'
+import { perfilPorAuth, verificarDestino } from '@/app/api/_lib/destino-usuario'
 
 export const runtime = 'nodejs'
 export const fetchCache = 'force-no-store'
@@ -28,6 +29,10 @@ export async function POST(req: NextRequest) {
   if (body?.accion === 'reintentar_bloqueo') {
     const { data: gestiona } = await c.usuario.rpc('legajo_puede_gestionar')
     if (gestiona !== true) return responder({ error: 'No autorizado' }, 403)
+    const actor = await perfilPorAuth(c.admin, c.authUserId)
+    if (!actor) return responder({ error: 'No autorizado' }, 403)
+    const bloqueo = await verificarDestino(c.admin, actor, empleadoId)
+    if (bloqueo) return responder(await bloqueo.json(), bloqueo.status)
     const { data: u } = await c.admin.from('usuarios').select('auth_user_id, acceso_bloqueado').eq('id', empleadoId).maybeSingle()
     const fila = u as { auth_user_id?: string | null; acceso_bloqueado?: boolean } | null
     if (!fila?.acceso_bloqueado) return responder({ error: 'La persona no tiene el acceso bloqueado por una baja' }, 400)

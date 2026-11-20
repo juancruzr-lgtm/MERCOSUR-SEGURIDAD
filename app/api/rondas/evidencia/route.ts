@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { fetchSinCache, getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { alcanceDe } from '@/lib/capacidades'
 import { firmaImagenValida, validarFotoOperativa } from '../../_lib/validar-foto'
+import { errorTransitorioRegistro, registrarConReintentos } from '../../_lib/registro-evidencia'
 
 export const runtime = 'nodejs'
 
@@ -51,18 +52,25 @@ export async function POST(req: NextRequest) {
 
   const ejecucionPuntoId = form.get('ejecucionPuntoId')
   const foto = form.get('foto')
+  // Modo "sólo vincular": la foto ya está en Storage (una subida anterior cuya
+  // fila no llegó a registrarse). Se registra la fila desde el objeto guardado,
+  // sin volver a mandar la imagen por una red mala. Mismas validaciones de
+  // turno, pertenencia y secuencia que la subida normal.
+  const soloVincular = form.get('soloVincular') === '1'
 
   if (typeof ejecucionPuntoId !== 'string' || !UUID_RE.test(ejecucionPuntoId)) {
     return NextResponse.json({ error: 'Punto de ejecución inválido' }, { status: 400 })
   }
-  if (!(foto instanceof Blob) || foto.size <= 0) {
-    return NextResponse.json({ error: 'Foto requerida' }, { status: 400 })
-  }
-  if (foto.size > MAX_FOTO_BYTES) {
-    return NextResponse.json({ error: 'La foto supera el límite de 5 MB' }, { status: 413 })
-  }
-  if (!MIME_PERMITIDOS.has(foto.type)) {
-    return NextResponse.json({ error: 'Formato de imagen no permitido' }, { status: 415 })
+  if (!soloVincular) {
+    if (!(foto instanceof Blob) || foto.size <= 0) {
+      return NextResponse.json({ error: 'Foto requerida' }, { status: 400 })
+    }
+    if (foto.size > MAX_FOTO_BYTES) {
+      return NextResponse.json({ error: 'La foto supera el límite de 5 MB' }, { status: 413 })
+    }
+    if (!MIME_PERMITIDOS.has(foto.type)) {
+      return NextResponse.json({ error: 'Formato de imagen no permitido' }, { status: 415 })
+    }
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -140,32 +148,57 @@ export async function POST(req: NextRequest) {
   }
 
   const storagePath = `${ejecucion.id}/${punto.id}/punto`
-  const buffer = Buffer.from(await foto.arrayBuffer())
-  if (!firmaImagenValida(buffer, foto.type)) {
-    return NextResponse.json(
-      { error: 'El contenido del archivo no coincide con una imagen válida' },
-      { status: 415 },
-    )
+  let buffer: Buffer
+  if (soloVincular) {
+    const { data: guardada, error: descargaError } = await admin.client.storage
+      .from(BUCKET)
+      .download(storagePath)
+    if (descargaError || !guardada) {
+      if (descargaError && errorTransitorioRegistro(descargaError.message)) {
+        return NextResponse.json(
+          { error: 'No se pudo verificar la foto guardada', codigo: 'registro_pendiente' },
+          { status: 503 },
+        )
+      }
+      // Sin objeto no hay nada que vincular: el cliente vuelve a subir la foto
+      // que tiene guardada en el teléfono.
+      return NextResponse.json(
+        { error: 'La foto no está en el servidor', codigo: 'foto_no_encontrada' },
+        { status: 404 },
+      )
+    }
+    buffer = Buffer.from(await guardada.arrayBuffer())
+  } else {
+    const archivo = foto as Blob
+    buffer = Buffer.from(await archivo.arrayBuffer())
+    if (!firmaImagenValida(buffer, archivo.type)) {
+      return NextResponse.json(
+        { error: 'El contenido del archivo no coincide con una imagen válida' },
+        { status: 415 },
+      )
+    }
   }
 
   const huella = validarFotoOperativa(buffer, MAX_FOTO_BYTES)
   if (!huella.ok) return NextResponse.json({ error: huella.error }, { status: huella.status })
 
-  const { error: uploadError } = await admin.client.storage
-    .from(BUCKET)
-    .upload(storagePath, buffer, {
-      upsert: true,
-      contentType: foto.type,
-      cacheControl: '0',
-    })
+  if (!soloVincular) {
+    const { error: uploadError } = await admin.client.storage
+      .from(BUCKET)
+      .upload(storagePath, buffer, {
+        upsert: true,
+        contentType: (foto as Blob).type,
+        cacheControl: '0',
+      })
 
-  if (uploadError) {
-    return NextResponse.json({ error: uploadError.message }, { status: 500 })
+    if (uploadError) {
+      return NextResponse.json({ error: uploadError.message }, { status: 500 })
+    }
   }
 
   // El trigger de base reemplaza turno/guardia/objetivo por los valores
   // autoritativos de la ejecución y verifica que el objeto exista en Storage.
-  const { data: evidencia, error: evidenciaError } = await admin.client
+  const registrarFila = () => admin.client
     .from('evidencias')
     .upsert(
       {
@@ -187,12 +220,21 @@ export async function POST(req: NextRequest) {
     .select('id, proceso_id, bucket, storage_path, created_at')
     .single()
 
+  // Reintento con backoff corto ante fallas transitorias (fetch failed, etc.).
+  const { resultado } = await registrarConReintentos(registrarFila)
+  const { data: evidencia, error: evidenciaError } = resultado
+
   if (evidenciaError) {
-    // El path es determinístico: un reintento vuelve a usar el mismo objeto y
-    // puede reconciliar la fila sin generar archivos huérfanos adicionales.
+    // El path es determinístico: el cliente guarda la foto en el teléfono y
+    // reintenta con `soloVincular` (sin volver a subirla). 503 + código para
+    // distinguirlo de un rechazo. El punto NO se marca como hecho.
+    const transitorio = errorTransitorioRegistro(evidenciaError.message)
     return NextResponse.json(
-      { error: `La foto se subió pero no pudo registrarse: ${evidenciaError.message}` },
-      { status: 500 },
+      {
+        error: `La foto se subió pero no pudo registrarse: ${evidenciaError.message}`,
+        codigo: transitorio ? 'registro_pendiente' : 'registro_rechazado',
+      },
+      { status: transitorio ? 503 : 500 },
     )
   }
 

@@ -100,6 +100,14 @@ function numero(valor: unknown): number | null {
 // ── Carga de puntos de ronda ─────────────────────────────────────────────────
 
 /**
+ * `ronda_punto_control_gps` (incumplimientos consecutivos y foto obligatoria en la próxima visita)
+ * depende de la migración 20260802, que NO está aplicada en producción (ver PR #372, sin mergear).
+ * Mientras sea false, la Página GPS no la consulta y muestra 0 incumplimientos / sin foto obligatoria,
+ * que es lo mismo que mostraba con el 404.
+ */
+export const CONTROL_GPS_DISPONIBLE = false
+
+/**
  * Trae los puntos de ronda activos con posición, más lo que ya está calculado
  * sobre ellos: último diagnóstico persistido, racha de incumplimientos y si
  * tienen foto de referencia.
@@ -176,10 +184,15 @@ export async function cargarPuntosRondaGps(
       .select('ronda_punto_id, recomendacion, radio_sugerido, latitud_sugerida, longitud_sugerida, visitas_consideradas, created_at')
       .in('ronda_punto_id', puntoIds)
       .order('created_at', { ascending: false }),
-    supabase
-      .from('ronda_punto_control_gps')
-      .select('ronda_punto_id, incumplimientos_consecutivos, foto_requerida_proxima_visita')
-      .in('ronda_punto_id', puntoIds),
+    // Tabla de la migración 20260802 (reincidencia GPS), NO aplicada en producción: el pedido daba
+    // 404 cada vez que se abría la Página GPS (F-16). Queda apagado hasta que se aplique la parte
+    // segura que reemplaza el PR #372 (sin mergear); entonces poner CONTROL_GPS_DISPONIBLE = true.
+    CONTROL_GPS_DISPONIBLE
+      ? supabase
+        .from('ronda_punto_control_gps')
+        .select('ronda_punto_id, incumplimientos_consecutivos, foto_requerida_proxima_visita')
+        .in('ronda_punto_id', puntoIds)
+      : Promise.resolve({ data: [] as any[] }),
     // Sólo el ID: saber que existe foto es una consulta, no una descarga.
     supabase
       .from('ronda_punto_referencias')

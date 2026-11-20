@@ -16,6 +16,7 @@ import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchSinCache, getBearerToken, getSupabaseAdmin } from '../../_lib/employee-auth'
 import { firmaImagenValida, validarFotoOperativa } from '../../_lib/validar-foto'
+import { errorTransitorioRegistro, registrarConReintentos } from '../../_lib/registro-evidencia'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -78,7 +79,10 @@ export async function POST(req: NextRequest) {
   if (subida.error) return NextResponse.json({ error: subida.error.message }, { status: 500 })
 
   // El trigger completa vigilador, objetivo y turno desde el registro.
-  const { error } = await admin.client.from('evidencias').upsert({
+  // Idempotente (upsert por proceso + path determinístico): ante una falla
+  // transitoria entre el servidor y la base ("fetch failed") se reintenta con
+  // backoff corto, igual que en rondas (app/api/_lib/registro-evidencia).
+  const { resultado } = await registrarConReintentos(() => admin.client.from('evidencias').upsert({
     proceso_tipo: 'protocolo',
     proceso_id: registroId,
     tipo_evidencia: 'tarea_turno',
@@ -87,9 +91,20 @@ export async function POST(req: NextRequest) {
     contenido_sha256: huella.sha256,
     bytes: huella.bytes,
     content_type: huella.mime,
-  }, { onConflict: 'proceso_tipo,proceso_id,tipo_evidencia' })
+  }, { onConflict: 'proceso_tipo,proceso_id,tipo_evidencia' }))
+  const { error } = resultado
   if (error) {
-    return NextResponse.json({ error: `La foto se subió pero no pudo registrarse: ${error.message}` }, { status: 500 })
+    // Transitorio tras agotar los reintentos: 503 + código, para que el
+    // cliente lo distinga de un rechazo y pueda volver a intentar (la foto
+    // queda en Storage con el mismo path; un nuevo envío la pisa).
+    const transitorio = errorTransitorioRegistro(error.message)
+    return NextResponse.json(
+      {
+        error: `La foto se subió pero no pudo registrarse: ${error.message}`,
+        codigo: transitorio ? 'registro_pendiente' : 'registro_rechazado',
+      },
+      { status: transitorio ? 503 : 500 },
+    )
   }
   return NextResponse.json({ ok: true })
 }

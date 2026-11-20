@@ -1,0 +1,149 @@
+{
+  "descripcion": "Errores de TypeScript tolerados (históricos) por archivo y código. Lo genera `node scripts/tsc-baseline.mjs --actualizar`; CI falla si aparecen errores nuevos.",
+  "total": 132,
+  "archivos": {
+    "app/api/_lib/auth-repair.ts": {
+      "TS2802": 1
+    },
+    "app/api/_lib/employee-auth.ts": {
+      "TS2339": 1
+    },
+    "app/api/ia/analizar/route.ts": {
+      "TS2339": 1
+    },
+    "app/api/ia/evidencia/url/route.ts": {
+      "TS2339": 1
+    },
+    "app/api/ia/puntos/promover-referencia/route.ts": {
+      "TS2339": 1
+    },
+    "app/api/ia/puntos/referencia/route.ts": {
+      "TS2339": 2
+    },
+    "app/api/ia/referencias/imagen/route.ts": {
+      "TS2339": 2
+    },
+    "app/api/ia/referencias/preparar/route.ts": {
+      "TS2339": 1
+    },
+    "app/api/ia/referencias/route.ts": {
+      "TS2339": 4
+    },
+    "app/api/ia/referencias/url/route.ts": {
+      "TS2339": 1
+    },
+    "app/api/legajo/[id]/planilla/route.ts": {
+      "TS2802": 2
+    },
+    "app/api/legajo/[id]/turnos/route.ts": {
+      "TS2339": 8,
+      "TS2802": 2
+    },
+    "app/api/obs/summary/route.ts": {
+      "TS2362": 1,
+      "TS2363": 1
+    },
+    "app/api/obs/usage/route.ts": {
+      "TS2802": 1
+    },
+    "app/dashboard/AppClient.tsx": {
+      "TS2339": 3,
+      "TS2345": 4,
+      "TS2352": 1,
+      "TS2802": 5
+    },
+    "app/guardias/[id]/LegajoPage.tsx": {
+      "TS2322": 3
+    },
+    "app/guardias/[id]/SeccionPlanilla.tsx": {
+      "TS2322": 7
+    },
+    "components/guardia/GuardiaMobile.tsx": {
+      "TS2339": 9,
+      "TS2349": 11,
+      "TS2560": 2
+    },
+    "components/guardia/ResumenJornadaModal.tsx": {
+      "TS2322": 2
+    },
+    "components/ia/AnalisisIAPanel.tsx": {
+      "TS2339": 1,
+      "TS2802": 1
+    },
+    "components/ia/IngresosDiaPanel.tsx": {
+      "TS2339": 1
+    },
+    "components/ia/ReferenciasIAPanel.tsx": {
+      "TS2339": 1
+    },
+    "components/ia/RondaIAPuntos.tsx": {
+      "TS2802": 1
+    },
+    "components/objetivos/CentroOperativoObjetivo.tsx": {
+      "TS2802": 3
+    },
+    "components/objetivos/LegajoSecciones.tsx": {
+      "TS2339": 2
+    },
+    "components/observacion/ObservacionSistema.tsx": {
+      "TS2339": 1,
+      "TS2345": 1,
+      "TS2350": 2
+    },
+    "components/rondas/RondaAlertasPanel.tsx": {
+      "TS2802": 1
+    },
+    "components/rondas/RondaGuardiaEjecucion.tsx": {
+      "TS2339": 1
+    },
+    "components/rondas/RondaPuntosEditor.tsx": {
+      "TS2339": 2
+    },
+    "components/supervisor/SupervisorMobile.tsx": {
+      "TS2339": 1,
+      "TS2345": 2,
+      "TS2352": 1,
+      "TS2802": 1
+    },
+    "lib/asignacion-mensual.ts": {
+      "TS2802": 5
+    },
+    "lib/bandeja-planillas.ts": {
+      "TS2802": 1
+    },
+    "lib/calendario-mes.ts": {
+      "TS2802": 1
+    },
+    "lib/cobertura-historica.ts": {
+      "TS2802": 9
+    },
+    "lib/ia/procesar.ts": {
+      "TS2802": 1
+    },
+    "lib/legajo-objetivo.ts": {
+      "TS2352": 1
+    },
+    "lib/programacion.ts": {
+      "TS2802": 1
+    },
+    "lib/seleccion-grilla.ts": {
+      "TS2345": 2,
+      "TS2802": 2
+    },
+    "lib/supervisor-gps.ts": {
+      "TS2339": 1
+    },
+    "tests/ia-referencias.test.ts": {
+      "TS2339": 1
+    },
+    "tests/posiciones-operativas.test.ts": {
+      "TS2367": 1
+    },
+    "tests/seleccion-grilla.test.ts": {
+      "TS2802": 5
+    },
+    "tests/visual-empleado.test.ts": {
+      "TS1117": 1
+    }
+  }
+}

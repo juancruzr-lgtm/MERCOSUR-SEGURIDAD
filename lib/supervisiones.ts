@@ -11,6 +11,8 @@
 // pantalla, ni ninguna otra ventana temporal. Empezar un mes nuevo NO reinicia
 // el estado de nada.
 
+import { sumarDias } from './periodo-argentina'
+
 export type EstadoSupervision = 'nunca' | 'vigente' | 'vencida'
 
 // Frecuencia asumida cuando el objetivo no define una propia.
@@ -208,9 +210,7 @@ export function objetivoEnOperacion(
   fechas: Array<string | null | undefined>,
   ahora: Date = new Date(),
 ): boolean {
-  const limite = new Date(ahora)
-  limite.setDate(limite.getDate() - DIAS_SIN_OPERACION)
-  const corte = fechaISO(limite)
+  const corte = corteSinOperacion(ahora)
 
   for (const f of fechas) {
     if (!f) continue
@@ -219,6 +219,17 @@ export function objetivoEnOperacion(
     if (f.slice(0, 10) >= corte) return true
   }
   return false
+}
+
+/**
+ * Primer día (YYYY-MM-DD, calendario argentino) de la ventana de
+ * DIAS_SIN_OPERACION. Antes salía de `setDate`/`getDate` en la hora LOCAL del
+ * proceso: en un servidor en UTC, a las 21:00 ART ya es el día siguiente y el
+ * corte se corría un día (el borde de 7 días exactos fallaba). El "hoy" es el
+ * de Argentina y la resta es aritmética de calendario, sin huso.
+ */
+function corteSinOperacion(ahora: Date): string {
+  return sumarDias(fechaArgentinaDe(ahora), -DIAS_SIN_OPERACION)
 }
 
 function fechaISO(d: Date): string {
@@ -251,10 +262,8 @@ export function faseOperativa(
   yaOperoAntes: boolean,
   ahora: Date = new Date(),
 ): FaseOperativa {
-  const hoy = fechaISO(ahora)
-  const limite = new Date(ahora)
-  limite.setDate(limite.getDate() - DIAS_SIN_OPERACION)
-  const corte = fechaISO(limite)
+  const hoy = fechaArgentinaDe(ahora)
+  const corte = corteSinOperacion(ahora)
 
   let recientes = false
   let futuros = false
