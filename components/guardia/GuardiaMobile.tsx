@@ -1309,10 +1309,12 @@ export default function GuardiaMobile({ user }: { user: any }) {
     // no, se sigue sin ubicación (el GPS sólo informa, no traba).
     let gpsIngreso: GpsData | null = ingresoGps
     const gpsEnCurso = gpsIngresoRef.current
+    let gpsFallo: string | null = null
     if (!gpsIngreso && gpsEnCurso) {
       const esperaDesde = Date.now()
       const r = gpsEnCurso.resultado() ?? await gpsEnCurso.esperar(TOPE_ESPERA_GPS_CONFIRMAR_MS)
       if (r?.ok) gpsIngreso = r.data
+      else if (r && 'reason' in r) gpsFallo = r.reason
       track('gps_espera_confirmar', {
         screen: 'ingreso_flow',
         turno_id: ingresoTurno.id,
@@ -1322,6 +1324,21 @@ export default function GuardiaMobile({ user }: { user: any }) {
           resultado: r ? (r.ok ? 'ok' : ('reason' in r ? r.reason : 'sin_lectura')) : 'sin_resultado_al_tope',
           tope_ms: TOPE_ESPERA_GPS_CONFIRMAR_MS,
         },
+      })
+    }
+    // Evidencia GPS nunca peor que antes: si la captura en segundo plano no
+    // llegó (p. ej. el celular la cortó al abrir la cámara), se hace una lectura
+    // nueva con el mismo tope que tenía el ingreso antes de este cambio (10 s).
+    // Sólo se omite si el permiso está denegado o no hay GPS en el equipo.
+    if (!gpsIngreso && gpsFallo !== 'denied' && gpsFallo !== 'unsupported') {
+      const reintentoDesde = Date.now()
+      const r2 = await adquirirGps()
+      if (r2.ok) gpsIngreso = r2.data
+      track('gps_reintento_confirmar', {
+        screen: 'ingreso_flow',
+        turno_id: ingresoTurno.id,
+        duration_ms: Date.now() - reintentoDesde,
+        value_json: { intento_id: intentoId, resultado: r2.ok ? 'ok' : r2.reason },
       })
     }
     const auditoria  = calcularAuditoriaRadioGps(gpsIngreso, objetivo)
