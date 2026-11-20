@@ -5733,18 +5733,22 @@ function AgregarRegistroReporteModal({ onClose, guardias, objetivos, turnos, use
         turnoId = nuevoTurno.id
         setTurnos((prev: Turno[]) => [...prev, nuevoTurno])
 
-        const usuarioActual = user?.id
-          ? user
-          : (await supabase.from('usuarios').select('id').eq('auth_user_id', (await supabase.auth.getUser()).data.user?.id || '').single()).data
-        if (usuarioActual?.id) {
-          await supabase.from('turnos_auditoria').insert({
-            turno_id: turnoId,
-            modificado_por: usuarioActual.id,
-            campo: 'creacion',
-            valor_anterior: null,
-            valor_nuevo: `reporte/${origenAuditoria}`,
-            motivo: `Creado desde Reportes (${origenAuditoria}) — ${form.comentario || 'sin comentario'}`,
-          })
+        // Motivo del alta: lo registra el servidor (turnos_auditoria no admite
+        // escrituras desde el navegador). Si falla, el turno igual queda auditado
+        // por el trigger de alta; no se frena la carga.
+        try {
+          const { data: ses } = await supabase.auth.getSession()
+          const tk = ses.session?.access_token
+          if (tk) {
+            const r = await fetch('/api/turnos/auditoria-alta', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tk}` },
+              body: JSON.stringify({ turno_id: turnoId, origen: origenAuditoria, comentario: form.comentario || '' }),
+            })
+            if (!r.ok) console.warn('[reportes] motivo del alta no registrado:', r.status)
+          }
+        } catch (e) {
+          console.warn('[reportes] motivo del alta no registrado:', e)
         }
       }
 
