@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ensureEmployeeAuth, getSupabaseAdmin, nombreEmpleado, requireCapacidad, type UsuarioEmpleado } from '../_lib/employee-auth'
+import { ensureEmployeeAuth, getBearerToken, getSupabaseAdmin, nombreEmpleado, requireCapacidad, type UsuarioEmpleado } from '../_lib/employee-auth'
 import { marcarCambioObligatorio } from '../_lib/acceso-password'
+import { filtrarOperables, perfilPorAuth } from '../_lib/destino-usuario'
 
 type Omitido = { usuario_id: string, empleado: string, motivo: string }
 type ErrorSync = { usuario_id: string, empleado: string, error: string }
@@ -20,6 +21,13 @@ export async function POST(req: NextRequest) {
 
   if (usuariosError) return NextResponse.json({ error: usuariosError.message }, { status: 500 })
 
+  // Jerarquía: no toca cuentas gerenciales ni de puesto superior a quien sincroniza.
+  const { data: authData } = await admin.client.auth.getUser(getBearerToken(req) ?? '')
+  const actor = authData?.user ? await perfilPorAuth(admin.client, authData.user.id) : null
+  if (!actor) return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
+  const operables = await filtrarOperables(admin.client, actor, (usuarios || []).map((u: { id: string }) => u.id))
+  if (operables.error) return NextResponse.json({ error: operables.error }, { status: 500 })
+
   const omitidos: Omitido[] = []
   const errores: ErrorSync[] = []
   const summary = {
@@ -31,6 +39,10 @@ export async function POST(req: NextRequest) {
   }
 
   for (const usuario of (usuarios || []) as UsuarioEmpleado[]) {
+    if (!operables.permitidos.has(usuario.id)) {
+      omitidos.push({ usuario_id: usuario.id, empleado: nombreEmpleado(usuario), motivo: 'omitido: cuenta fuera de tu jerarquía' })
+      continue
+    }
     // Sólo crea las cuentas que faltan y vincula: NO resetea contraseñas existentes
     // ni toca a desvinculados o bloqueados por baja (ver motivoSinAcceso).
     const resultado = await ensureEmployeeAuth(admin.client, usuario, { conservarPassword: true })
