@@ -1,6 +1,6 @@
 {
   "descripcion": "Errores de TypeScript tolerados (históricos) por archivo y código. Lo genera `node scripts/tsc-baseline.mjs --actualizar`; CI falla si aparecen errores nuevos.",
-  "total": 135,
+  "total": 132,
   "archivos": {
     "app/api/_lib/auth-repair.ts": {
       "TS2802": 1
@@ -47,11 +47,9 @@
       "TS2802": 1
     },
     "app/dashboard/AppClient.tsx": {
-      "TS2304": 1,
       "TS2339": 3,
       "TS2345": 4,
       "TS2352": 1,
-      "TS2552": 2,
       "TS2802": 5
     },
     "app/guardias/[id]/LegajoPage.tsx": {
