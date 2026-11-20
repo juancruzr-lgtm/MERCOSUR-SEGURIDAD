@@ -6667,7 +6667,10 @@ function Asistencia({ registros, setRegistros, turnos, setTurnos, guardias, obje
 }
 
 // Anulación de un registro (carga manual o fichaje GPS). Compartido por Asistencia y Reportes.
-function AnularRegistroModal({ registro, onClose, setRegistros }: { registro: RegistroAsistencia; onClose: () => void; setRegistros: any }) {
+// `alAnular`: Asistencia lo saca de la lista ('quitar', como antes); Reportes lo
+// deja visible como anulado ('marcar'), igual que lo guarda la base: el
+// registro no se borra, queda con registro_anulado_at y horas en 0.
+function AnularRegistroModal({ registro, onClose, setRegistros, alAnular = 'quitar' }: { registro: RegistroAsistencia; onClose: () => void; setRegistros: any; alAnular?: 'quitar' | 'marcar' }) {
   const registroAnulando = registro
   const setRegistroAnulando = (_: null) => onClose()
   const [motivoAnulacion, setMotivoAnulacion] = useState('')
@@ -6683,8 +6686,12 @@ function AnularRegistroModal({ registro, onClose, setRegistros }: { registro: Re
         p_motivo: motivoAnulacion.trim(),
       })
       if (error) throw error
-      setRegistros((prev: RegistroAsistencia[]) =>
-        prev.filter((r: RegistroAsistencia) => r.id !== registroAnulando.id)
+      const motivo = motivoAnulacion.trim()
+      setRegistros((prev: RegistroAsistencia[]) => alAnular === 'marcar'
+        ? prev.map((r: RegistroAsistencia) => r.id === registroAnulando.id
+          ? { ...r, registro_anulado_at: new Date().toISOString(), registro_anulado_motivo: motivo, horas_liquidables: 0 } as RegistroAsistencia
+          : r)
+        : prev.filter((r: RegistroAsistencia) => r.id !== registroAnulando.id)
       )
       setRegistroAnulando(null)
       setMotivoAnulacion('')
@@ -6743,7 +6750,11 @@ function EditarRegistroManualModal({ registro, onClose, turnos, setTurnos, setRe
     if (!registroEditandoManual || !formEditManual.motivo.trim()) return
     setEditandoManual(true)
     const turno = turnos.find((t: Turno) => t.id === registroEditandoManual.turno_id)
-    if (!turno) { setEditandoManual(false); return }
+    if (!turno) {
+      setEditandoManual(false)
+      alert('No se encontró el turno de este registro entre los cargados. Recargá la pantalla y volvé a intentar.')
+      return
+    }
     try {
       const cambioFecha = formEditManual.fecha !== turno.fecha
       const cambioHorario = formEditManual.hora_inicio !== turno.hora_inicio?.slice(0, 5) || formEditManual.hora_fin !== turno.hora_fin?.slice(0, 5)
@@ -9142,13 +9153,17 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
         </div>
       )}
 
+      {/* Mismo estado que el resto de los modales de Reportes: la planilla lee
+          turnosReportes/registrosReportes (el mes elegido), no el estado global
+          del mes actual — con el global, editar un mes anterior no encontraba
+          el turno y la pantalla no se refrescaba. */}
       {registroAnulando && (
-        <AnularRegistroModal registro={registroAnulando} onClose={() => setRegistroAnulando(null)} setRegistros={setRegistros} />
+        <AnularRegistroModal registro={registroAnulando} onClose={() => setRegistroAnulando(null)} setRegistros={setRegistrosReportes} alAnular="marcar" />
       )}
 
       {registroEditandoManual && (
         <EditarRegistroManualModal registro={registroEditandoManual} onClose={() => setRegistroEditandoManual(null)}
-          turnos={turnos} setTurnos={setTurnos} setRegistros={setRegistros} objetivos={objetivos} />
+          turnos={turnosReportes} setTurnos={setTurnosReportes} setRegistros={setRegistrosReportes} objetivos={objetivos} />
       )}
     </div>
   )
