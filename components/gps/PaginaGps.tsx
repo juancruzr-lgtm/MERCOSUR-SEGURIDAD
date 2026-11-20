@@ -51,6 +51,8 @@ import {
   etiquetaDiagnostico,
   proponeCambio,
   LIMITE_MARCACIONES,
+  MENSAJE_CONTROL_NO_DISPONIBLE,
+  type EstadoControlReincidencia,
   type MarcacionPunto,
   type PuntoRondaGps,
 } from '@/lib/gps-mapa'
@@ -139,6 +141,8 @@ export default function PaginaGps({
   const [puntos, setPuntos] = useState<PuntoRondaGps[]>([])
   const [puntosTruncados, setPuntosTruncados] = useState(false)
   const [cargandoPuntos, setCargandoPuntos] = useState(true)
+  // Si la racha por reincidencia no se pudo leer se avisa: nunca un cero mudo.
+  const [controlReincidencia, setControlReincidencia] = useState<EstadoControlReincidencia>({ disponible: true, error: null })
 
   // ── Selección y acciones ──────────────────────────────────────────────────
   const [seleccion, setSeleccion] = useState<SeleccionGps | null>(null)
@@ -181,6 +185,7 @@ export default function PaginaGps({
     if (resultado.error) setError(resultado.error)
     setPuntos(resultado.puntos)
     setPuntosTruncados(resultado.truncado)
+    setControlReincidencia(resultado.controlReincidencia)
     setCargandoPuntos(false)
     return resultado.puntos
   }, [nombresObjetivo, objetivoId])
@@ -316,7 +321,7 @@ export default function PaginaGps({
   const puntosFiltrados = useMemo(() => puntos.filter(p => {
     switch (filtroPuntos) {
       case 'con_recomendacion': return proponeCambio(p.diagnosticoEstado)
-      case 'fallas_repetidas':  return p.incumplimientosConsecutivos > 0
+      case 'fallas_repetidas':  return (p.incumplimientosConsecutivos ?? 0) > 0
       case 'sin_datos':         return p.diagnosticoEstado === 'sin_datos' || p.diagnosticoEstado === null
       default:                  return true
     }
@@ -787,7 +792,9 @@ export default function PaginaGps({
             <select id="gps-filtro-puntos" className={styles.input} value={filtroPuntos} onChange={e => setFiltroPuntos(e.target.value as FiltroPuntos)}>
               <option value="todos">Todos</option>
               <option value="con_recomendacion">Con recomendación</option>
-              <option value="fallas_repetidas">Fallas repetidas</option>
+              <option value="fallas_repetidas" disabled={!controlReincidencia.disponible}>
+                {controlReincidencia.disponible ? 'Fallas repetidas' : `Fallas repetidas (${MENSAJE_CONTROL_NO_DISPONIBLE.toLowerCase()})`}
+              </option>
               <option value="sin_datos">Sin datos suficientes</option>
             </select>
           </div>
@@ -828,6 +835,12 @@ export default function PaginaGps({
         <div className={styles.aviso}>
           Se muestran los primeros {LIMITE_MARCADORES} fichajes de {marcadores.length}.
           Afiná el filtro por objetivo, vigilador o fechas para verlos todos.
+        </div>
+      )}
+      {!controlReincidencia.disponible && !cargandoPuntos && (
+        <div className={styles.aviso} role="status" title={controlReincidencia.error ?? undefined}>
+          {MENSAJE_CONTROL_NO_DISPONIBLE}: no se pudo leer la racha de registros fuera del radio
+          {controlReincidencia.error ? ` (${controlReincidencia.error})` : ''}. Los puntos se muestran igual.
         </div>
       )}
       {puntosTruncados && (
