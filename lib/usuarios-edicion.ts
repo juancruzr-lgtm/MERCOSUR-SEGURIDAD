@@ -1,7 +1,7 @@
 // Edición de empleados sin pérdida de datos (defecto encontrado el 05/11/2026).
 //
 // CAUSA: varias respuestas traen la fila del empleado INCOMPLETA (por ejemplo
-// /api/sync-auth-emails, que corre sola al abrir Guardias, devuelve 12 columnas
+// /api/sync-auth-emails, botón «Sincronizar emails Auth» en Guardias, devuelve 12 columnas
 // sin cuenta_bancaria, cuil ni legajo_visual). La pantalla reemplazaba la fila
 // completa por esa versión parcial; al editar, el formulario arrancaba con esos
 // campos vacíos y el guardado mandaba TODOS los campos, así que los "vacíos"

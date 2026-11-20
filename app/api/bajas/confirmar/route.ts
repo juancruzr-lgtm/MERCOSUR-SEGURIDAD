@@ -16,6 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { SIN_CACHE, clientesDelPedido } from '@/app/api/documentacion/_clientes'
 import { bloquearAccesoAuth } from '@/app/api/_lib/employee-auth'
+import { perfilPorAuth, verificarDestino } from '@/app/api/_lib/destino-usuario'
 import { sendToUsers } from '@/app/api/_lib/push-notificaciones'
 import type { PushSubscriptionRow } from '@/app/api/_lib/web-push'
 import { TIPO_AVISO_BAJA, armarAvisosTurnosFuturos, type TurnoFuturo } from '@/lib/baja-avisos'
@@ -31,6 +32,16 @@ export async function POST(req: NextRequest) {
   if ('error' in c) return responder({ error: c.error }, c.status)
   const body = await req.json().catch(() => null) as { baja_id?: string; vacaciones?: unknown } | null
   if (!body?.baja_id || !/^[0-9a-f-]{36}$/i.test(body.baja_id)) return responder({ error: 'Falta la baja' }, 400)
+
+  // Jerarquía sobre la persona de la baja (leída de la base) antes de confirmar.
+  const { data: previa } = await c.admin.from('baja_laboral').select('empleado_id').eq('id', body.baja_id).maybeSingle()
+  const empleadoPrevio = (previa as { empleado_id?: string } | null)?.empleado_id
+  if (empleadoPrevio) {
+    const actor = await perfilPorAuth(c.admin, c.authUserId)
+    if (!actor) return responder({ error: 'No autorizado' }, 403)
+    const bloqueo = await verificarDestino(c.admin, actor, empleadoPrevio)
+    if (bloqueo) return responder(await bloqueo.json(), bloqueo.status)
+  }
 
   const { data, error } = await c.usuario.rpc('baja_confirmar', { p_baja_id: body.baja_id, p_vacaciones: body.vacaciones ?? null })
   if (error) return responder({ error: error.message }, /Administración o Gerencia/.test(error.message) ? 403 : 400)

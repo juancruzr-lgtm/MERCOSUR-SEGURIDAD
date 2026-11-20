@@ -10,19 +10,22 @@ import { S, horas, useAccion } from './comun'
 import DetalleHoras from './DetalleHoras'
 import type { Periodo } from './periodo'
 import { nombreDelMes } from '@/lib/facturacion/periodo-seguro'
+import { usePropuestasHoras } from './usePropuestasHoras'
 
 type Fila = { v: any; prop: any | null; error: string | null }
+const pedido = (v: any) => ({ contratoId: v.contrato_id, objetivoId: v.objetivo_id })
 
 /** Advertencias que conviene mirar antes de aprobar (no bloquean). */
 const avisos = (v: any, r: any) => avisosHoras(Boolean(v.contrato?.separar_diurna_nocturna), r)
 
 export default function Horas({ mes, periodo }: { mes: string; periodo: Periodo }) {
-  const [filas, setFilas] = useState<Fila[]>([])
+  const [vinculos, setVinculos] = useState<any[]>([])
+  // Propuestas bajo demanda, con caché por mes y abortadas al salir (F-13): abrir la pestaña no calcula nada.
+  const { props, calcular, calculando } = usePropuestasHoras(mes)
   const [aprobadas, setAprobadas] = useState<any[]>([])
   const [abierta, setAbierta] = useState<string | null>(null)
   const [notas, setNotas] = useState<Record<string, string>>({})
   const [trat, setTrat] = useState<Record<string, 'no_facturar' | 'facturar'>>({})
-  const [calculando, setCalculando] = useState(false)
   const { ocupado, correr, Mensaje } = useAccion()
   const clave = (v: any) => `${v.contrato_id}:${v.objetivo_id}`
 
@@ -32,20 +35,7 @@ export default function Horas({ mes, periodo }: { mes: string; periodo: Periodo 
       .filter(x => x.contrato?.estado === 'vigente')
       .sort((a, b) => `${a.contrato?.cliente?.razon_social} ${a.objetivo?.nombre}`.localeCompare(`${b.contrato?.cliente?.razon_social} ${b.objetivo?.nombre}`))
     setAprobadas(await leer('fact_horas_aprobaciones', q => q.eq('estado', 'aprobada').order('aprobado_at', { ascending: false }).limit(1000)))
-    setFilas(vs.map(v => ({ v, prop: null, error: null })))
-    // Propuestas de todos los objetivos, de a 4 para no saturar el servidor.
-    setCalculando(true)
-    const res: Fila[] = vs.map(v => ({ v, prop: null, error: null }))
-    let i = 0
-    await Promise.all(Array.from({ length: 4 }, async () => {
-      while (i < vs.length) {
-        const n = i++
-        try { res[n] = { v: vs[n], prop: await api('horas', { accion: 'proponer', contrato_id: vs[n].contrato_id, objetivo_id: vs[n].objetivo_id, mes }), error: null } }
-        catch (e: any) { res[n] = { v: vs[n], prop: null, error: e?.message ?? 'No se pudo calcular' } }
-        setFilas([...res])
-      }
-    }))
-    setCalculando(false)
+    setVinculos(vs)
   }
   useEffect(() => { correr(cargar) }, [mes]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -56,11 +46,16 @@ export default function Horas({ mes, periodo }: { mes: string; periodo: Periodo 
     await api('horas', { accion: 'aprobar', contrato_id: f.v.contrato_id, objetivo_id: f.v.objetivo_id, mes, reemplazar: ya, tratamiento_descubiertos: t, notas: notas[k] ?? '' })
   }
 
+  const filas: Fila[] = vinculos.map(v => ({ v, prop: props[clave(v)]?.propuesta ?? null, error: props[clave(v)]?.error ?? null }))
+  const faltan = filas.filter(f => !f.prop).length
   const pendientes = filas.filter(f => f.prop && !aprobadaDe(f.v))
   return (
     <div style={S.card}>
       <div style={{ ...S.fila, justifyContent: 'space-between' }}>
         <h3 style={S.h3}>Horas de {mes} por objetivo</h3>
+        <button style={S.btn2} disabled={calculando || !vinculos.length} title="Calcula las horas propuestas de Reportes de cada objetivo. Puede tardar unos minutos; se cancela si salís de la pantalla."
+          onClick={() => { void calcular(vinculos.map(pedido), { forzar: faltan === 0 }) }}>
+          {calculando ? 'Calculando propuestas…' : faltan === 0 && vinculos.length ? 'Recalcular propuestas' : `Calcular propuestas (${faltan})`}</button>
         <button style={S.btn} disabled={ocupado || calculando || !pendientes.length || !periodo.habilitado} title={periodo.motivo ?? undefined} onClick={() => {
           if (!confirm(`APROBAR TODAS — ${nombreDelMes(mes)}\n\nSe aprueban las horas propuestas de ${pendientes.length} objetivo(s) pendiente(s). Lo ya aprobado no se toca.\n\n¿Continuar?`)) return
           correr(async () => {
@@ -88,7 +83,7 @@ export default function Horas({ mes, periodo }: { mes: string; periodo: Periodo 
                   <td style={S.td}><button style={{ ...S.btn2, padding: '2px 8px' }} disabled={!h} onClick={() => setAbierta(abierta === k ? null : k)}>{abierta === k ? '▾' : '▸'}</button></td>
                   <td style={S.td}>{f.v.contrato?.cliente?.razon_social}</td>
                   <td style={S.td}>{f.v.objetivo?.nombre}{av.length > 0 && <div style={{ color: '#fbbf24', fontSize: 12 }}>⚠ {av.join(' · ')}</div>}</td>
-                  <td style={S.num}>{f.error ? <span style={S.err}>{f.error}</span> : propuestas == null ? <span style={S.sub}>…</span> : <b>{horas(propuestas)} h</b>}</td>
+                  <td style={S.num}>{f.error ? <span style={S.err}>{f.error}</span> : propuestas == null ? (calculando ? <span style={S.sub}>…</span> : <button style={{ ...S.btn2, padding: '2px 8px' }} onClick={() => { void calcular([pedido(f.v)]) }}>Calcular</button>) : <b>{horas(propuestas)} h</b>}</td>
                   <td style={S.num}>{ap ? <span style={{ color: igual ? '#4ade80' : '#fbbf24' }}>{horas(ap.minutos_aprobados)} h</span> : <span style={S.sub}>—</span>}</td>
                   <td style={S.td}><input style={{ ...S.input, minWidth: 160 }} placeholder={t === 'facturar' ? 'Motivo (obligatorio)' : 'Notas'} value={notas[k] ?? ''} onChange={e => setNotas({ ...notas, [k]: e.target.value })} /></td>
                   <td style={S.td}>

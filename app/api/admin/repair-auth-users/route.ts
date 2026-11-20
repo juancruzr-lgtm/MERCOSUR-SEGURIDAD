@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auditAuthUsers, repairEmployeeAuthUser, summarizeRepairs } from '../../_lib/auth-repair'
-import { getSupabaseAdmin, requireCapacidad } from '../../_lib/employee-auth'
+import { tieneCapacidad } from '@/lib/capacidades'
+import { getSupabaseAdmin, resolverPerfil } from '../../_lib/employee-auth'
+import { filtrarOperables } from '../../_lib/destino-usuario'
 import { marcarCambioObligatorio } from '../../_lib/acceso-password'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
-  const adminError = await requireCapacidad(req, admin.client, 'configurar_sistema', 'Sesion de administrador requerida')
-  if (adminError) return adminError
+  const acceso = await resolverPerfil(req, admin.client)
+  if ('respuesta' in acceso) return acceso.respuesta
+  if (!tieneCapacidad(acceso.perfil, 'configurar_sistema')) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
+  }
 
   try {
     const body = await req.json().catch(() => ({}))
@@ -53,8 +58,17 @@ export async function POST(req: NextRequest) {
       })
     }
 
+    // Jerarquía: sólo se reparan cuentas sobre las que quien pide puede operar.
+    const operables = await filtrarOperables(admin.client, acceso.perfil, users.map(u => u.id))
+    if (operables.error) return NextResponse.json({ error: operables.error }, { status: 500 })
+    const fuera = users.filter(u => !operables.permitidos.has(u.id))
+    if (fuera.length && !repairAll) {
+      return NextResponse.json({ error: 'Sólo Gerencia puede operar sobre una cuenta de Gerencia o de un puesto superior al tuyo' }, { status: 403 })
+    }
+
     const results = []
     for (const usuario of users) {
+      if (!operables.permitidos.has(usuario.id)) continue
       results.push(await repairEmployeeAuthUser(admin.client, usuario, authIndex, {
         invalidAuthUserIds: repairAll ? [] : invalidAuthUserIds,
       }))

@@ -5,6 +5,7 @@ import { afipConfigDesdeEnv } from '@/lib/afip/config'
 import { corroborarEmpleado, esperarConTope } from '@/lib/afip/corroborar'
 import { sinCuentaBancaria } from '@/lib/usuarios-columnas'
 import { protegerVaciadoReservado } from '@/lib/usuarios-edicion'
+import { overridesPedidos, puedeOperarSobre, verificarDestino } from '../_lib/destino-usuario'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -124,7 +125,14 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const { payload, error } = armarPayload(body, { esAlta: true, puedeRolPrivilegiado, puedeEconomico, esGerReal })
-    if (error || !payload) return NextResponse.json({ error: error ?? 'Datos inválidos' }, { status: 400 })
+    if (error || !payload) return NextResponse.json({ error: error ?? 'Datos inválidos' }, { status: /^Sólo Gerencia/.test(error ?? '') ? 403 : 400 })
+    // Jerarquía: no se da de alta a alguien por encima del propio puesto.
+    const decision = puedeOperarSobre(perfil, { rol: null, puesto_organizacional: null }, {
+      rol: payload.rol as string | undefined,
+      puesto_organizacional: payload.puesto_organizacional as string | undefined,
+      overrides: overridesPedidos(body),
+    })
+    if (!decision.ok) return NextResponse.json({ error: decision.error ?? 'No autorizado' }, { status: 403 })
 
     const { data, error: dbError } = await admin.client
       .from('usuarios')
@@ -162,10 +170,19 @@ export async function PATCH(req: NextRequest) {
     if (!usuarioId) return NextResponse.json({ error: 'usuario_id es obligatorio' }, { status: 400 })
 
     const armado = armarPayload(body, { esAlta: false, puedeRolPrivilegiado, puedeEconomico, esGerReal })
-    if (armado.error || !armado.payload) return NextResponse.json({ error: armado.error ?? 'Datos inválidos' }, { status: 400 })
+    if (armado.error || !armado.payload) return NextResponse.json({ error: armado.error ?? 'Datos inválidos' }, { status: /^Sólo Gerencia/.test(armado.error ?? '') ? 403 : 400 })
     if (Object.keys(armado.payload).length === 0) {
       return NextResponse.json({ error: 'Sin campos para actualizar' }, { status: 400 })
     }
+
+    // Jerarquía sobre el DESTINO leído de la base (no del cliente): cuentas
+    // gerenciales sólo para Gerencia, sin autoescalada ni puestos superiores.
+    const bloqueo = await verificarDestino(admin.client, perfil, usuarioId, {
+      rol: armado.payload.rol as string | undefined,
+      puesto_organizacional: armado.payload.puesto_organizacional as string | undefined,
+      overrides: overridesPedidos(body),
+    })
+    if (bloqueo) return bloqueo
 
     // Defensa en el servidor (05/11/2026): un CBU, CUIL o legajo de Visual con
     // valor NO se vacía salvo que el cliente lo confirme (confirmar_vaciar).
