@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
   let body: unknown
   try { body = await req.json() } catch { return NextResponse.json({ error: 'Body inválido' }, { status: 400 }) }
   const datos = validarAuditoriaAlta(body)
-  if (!datos.ok) return NextResponse.json({ error: datos.error }, { status: 400 })
+  if ('error' in datos) return NextResponse.json({ error: datos.error }, { status: 400 })
 
   const { data: turno, error: turnoError } = await admin.client
     .from('turnos')
