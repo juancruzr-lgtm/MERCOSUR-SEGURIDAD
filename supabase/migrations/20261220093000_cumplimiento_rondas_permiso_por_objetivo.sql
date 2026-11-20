@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- [PREPARADO — NO APLICAR sin OK] cumplimiento_rondas_por_empleado: el permiso
+-- [APLICADA 20/11/2026] cumplimiento_rondas_por_empleado: el permiso
 -- se evalúa UNA vez por objetivo, no una vez por ventana de ronda (F-15).
 --
 -- PROBLEMA (auditoría funcional 19/11, F-15): la RPC devolvió HTTP 500 a los
@@ -56,7 +56,7 @@ AS $function$
     select vent.*
       from vent
      where exists (select 1 from permitidos p where p.objetivo_id is not distinct from vent.objetivo_id)
-  ), al as (
+  ), al as materialized (
     select a.turno_id, a.ronda_base_id, a.ventana_inicio, a.tipo,
            public.ronda_alerta_no_penaliza(a) as saneada                      -- [D] criterio único
       from public.ronda_alertas a
