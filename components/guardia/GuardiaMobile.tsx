@@ -1748,6 +1748,33 @@ export default function GuardiaMobile({ user }: { user: any }) {
       usedLegacyGps = true
     }
 
+    // Reintento después de una respuesta perdida: la salida ya quedó registrada
+    // y la base no deja reescribirla (FICHAJE_PROTEGIDO). Se confirma releyendo
+    // el registro y se muestra la salida que ya estaba, sin error.
+    if (egresoError && /FICHAJE_PROTEGIDO/.test(egresoError.message || '')) {
+      const { data: yaRegistrado } = await supabase
+        .from('registros_asistencia')
+        .select('hora_salida_real, horas_trabajadas')
+        .eq('id', registro.id)
+        .maybeSingle()
+      if (yaRegistrado?.hora_salida_real) {
+        track('egreso_ya_registrado', {
+          screen: 'egreso_flow',
+          turno_id: turno.id,
+          registro_id: registro.id,
+          value_json: { intento_id: egresoIntentoId },
+        })
+        setRegistros(prev => prev.map(r => r.id === registro.id
+          ? { ...r, hora_salida_real: yaRegistrado.hora_salida_real, horas_trabajadas: yaRegistrado.horas_trabajadas }
+          : r))
+        setMensaje({ texto: `✓ Tu salida ya estaba registrada a las ${String(yaRegistrado.hora_salida_real).slice(0, 5)}.`, tipo: 'ok' })
+        setResumenTurnoId(turno.id)
+        setFichando(null)
+        setTimeout(() => setMensaje(null), 4000)
+        return
+      }
+    }
+
     if (egresoError) {
       track('egreso_error', {
         screen: 'egreso_flow',
