@@ -1,4 +1,4 @@
-// "Completá tu legajo": obligatorio sólo el domicilio (20261219110000). PGlite, personas ficticias.
+// "Completá tu legajo": obligatorio sólo el domicilio (20261219120000). PGlite, personas ficticias.
 import { nuevaBase, migracion, P, cargarPersonas, como, intenta, informe } from './base.mjs'
 
 const t = informe()
@@ -37,7 +37,7 @@ const rpc = (p, sql, params = []) => como(db, p, () => intenta(() => db.query(sq
 const pend = async (p) => (await rpc(p, `select public.mi_legajo_pendiente() j`)).r?.rows[0].j
 const g = P.guardiaActivo
 
-const r1 = await intenta(() => db.exec(migracion('migrations/20261219110000_legajo_solo_domicilio_obligatorio.sql')))
+const r1 = await intenta(() => db.exec(migracion('migrations/20261219120000_legajo_solo_domicilio_obligatorio.sql')))
 t.check('la migración nueva aplica', r1.ok, r1.error)
 
 let j = await pend(g)
@@ -63,7 +63,7 @@ await db.query(`insert into public.documentacion_documentos (empleado_id, tipo, 
 await db.query(`insert into public.cred_simulada values ($1, false)`, [g.id])
 t.check('con DNI y credencial, ya no se pide', (await pend(g)).pedir === false)
 
-const rb = await intenta(() => db.exec(migracion('rollback/20261219110000_legajo_solo_domicilio_obligatorio_rollback.sql')))
+const rb = await intenta(() => db.exec(migracion('rollback/20261219120000_legajo_solo_domicilio_obligatorio_rollback.sql')))
 t.check('el rollback aplica', rb.ok, rb.error)
 j = await pend(g)
 t.check('…y vuelve a exigir los 12 datos (faltan los 6 opcionales que no cargó)', j.faltan.length === 6 && j.vacios === undefined, JSON.stringify(j.faltan))

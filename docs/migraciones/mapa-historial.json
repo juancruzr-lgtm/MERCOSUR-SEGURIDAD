@@ -1,6 +1,6 @@
 {
   "generado": "2026-11-04",
-  "actualizado": "2026-11-10 (main 8008a26): 11 versiones registradas con migration repair --status applied; las 82 filas anteriores sin cambios",
+  "actualizado": "2026-11-20: +33 archivos 20261208…20261219 (clasificados con list_migrations y la auditoría 19-20/11); 20261219110000_legajo_solo_domicilio_obligatorio renumerada a 20261219120000. 2026-11-10 (main 8008a26): 11 versiones registradas con migration repair --status applied; las 82 filas anteriores sin cambios",
   "base_main": "b79d32d",
   "proyecto": "rngdjslzfcjtepgzmzrs",
   "fuentes": [
@@ -8,16 +8,18 @@
     "diff-objetos.json / diff-funciones.txt (auditoría main vs producción 04/11)",
     "AUDITORIA-MAIN-VS-PRODUCCION-2026-11-04.md",
     "SELECT puntuales al catálogo 04/11 (rollbacks, índices, políticas, cambios_guardia)",
-    "SELECT version, name, created_by FROM supabase_migrations.schema_migrations (93 filas, 10/11, después de migration repair de 11 versiones)"
+    "SELECT version, name, created_by FROM supabase_migrations.schema_migrations (93 filas, 10/11, después de migration repair de 11 versiones)",
+    "list_migrations (MCP, sólo lectura) 20/11/2026: 114 filas",
+    "auditorias/auditoria-funcional-integral/12-codigo-vs-produccion.md (19-20/11, verificación de objetos en el catálogo)"
   ],
-  "piso_version": "20261207100100",
-  "total_archivos": 303,
-  "total_filas_remotas": 93,
+  "piso_version": "20261219120000",
+  "total_archivos": 336,
+  "total_filas_remotas": 114,
   "resumen": {
-    "APLICADA_A_MANO_SIN_REGISTRO": 205,
+    "APLICADA_A_MANO_SIN_REGISTRO": 217,
     "OBSOLETA_BORRADOR": 5,
-    "FALTA_REALMENTE": 1,
-    "REGISTRADA_OTRA_VERSION": 78,
+    "FALTA_REALMENTE": 3,
+    "REGISTRADA_OTRA_VERSION": 97,
     "REGISTRADA_MISMA_VERSION": 14
   },
   "archivos": [
@@ -3480,6 +3482,369 @@
       "version_compartida_con": [],
       "es_rollback": false,
       "nota": "Etapa B de #381, aplicada el 10/11/2026 a las 11:34 AR desde el SQL Editor y verificada (B-03 OK); registrada el mismo día con un repair aparte."
+    },
+    {
+      "archivo": "20261208100000_fichaje_solo_activos.sql",
+      "version": "20261208100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Objetos presentes en producción (auditoría 19-20/11); falta registrarla."
+    },
+    {
+      "archivo": "20261208100100_accesos_password.sql",
+      "version": "20261208100100",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Objetos presentes en producción (auditoría 19-20/11); falta registrarla."
+    },
+    {
+      "archivo": "20261208110000_postulaciones.sql",
+      "version": "20261208110000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Objetos presentes en producción (auditoría 19-20/11); falta registrarla."
+    },
+    {
+      "archivo": "20261208120000_postulacion_lecturas_ia.sql",
+      "version": "20261208120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Objetos presentes en producción (auditoría 19-20/11); falta registrarla."
+    },
+    {
+      "archivo": "20261209120000_escalamiento_nivel_resuelto.sql",
+      "version": "20261209120000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Sin objeto nuevo: el constraint ya incluye escalamiento_wa_resuelto (verificado 19/11)."
+    },
+    {
+      "archivo": "20261210100000_facturacion_vto_enviado_a_arca.sql",
+      "version": "20261210100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Objetos presentes en producción (auditoría 19-20/11); falta registrarla."
+    },
+    {
+      "archivo": "20261210110000_facturacion_plazo_pago_30_por_defecto.sql",
+      "version": "20261210110000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Sin objeto nuevo: default dias_vencimiento = 30 verificado 19/11."
+    },
+    {
+      "archivo": "20261211100000_legajo_datos_solicitud.sql",
+      "version": "20261211100000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261111121351",
+      "nombre_remoto": "legajo_datos_solicitud",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261211110000_postulacion_completar_legajo.sql",
+      "version": "20261211110000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261111125302",
+      "nombre_remoto": "postulacion_completar_legajo",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261212100000_facturacion_conciliacion_externa.sql",
+      "version": "20261212100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Objetos presentes en producción (auditoría 19-20/11); falta registrarla."
+    },
+    {
+      "archivo": "20261213100000_anular_registro_manual_auditoria_usuario.sql",
+      "version": "20261213100000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261112144912",
+      "nombre_remoto": "anular_registro_manual_auditoria_usuario",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261213110000_facturacion_renglones_texto_horas_facturar.sql",
+      "version": "20261213110000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261112150915",
+      "nombre_remoto": "facturacion_renglones_texto_horas_facturar",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261213120000_facturacion_fecha_emision_prefactura.sql",
+      "version": "20261213120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261112155321",
+      "nombre_remoto": "facturacion_fecha_emision_prefactura",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261213140000_reactivar_turno_anulado_trabajado.sql",
+      "version": "20261213140000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261112184058",
+      "nombre_remoto": "reactivar_turno_anulado_trabajado",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261213150000_reactivar_turno_supervisor.sql",
+      "version": "20261213150000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261112184507",
+      "nombre_remoto": "reactivar_turno_supervisor",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261213160000_facturacion_corregir_texto_comprobante.sql",
+      "version": "20261213160000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261116134044",
+      "nombre_remoto": "facturacion_corregir_texto_comprobante",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261213170000_facturacion_vincular_objetivos_nuevos.sql",
+      "version": "20261213170000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261116134105",
+      "nombre_remoto": "facturacion_vincular_objetivos_nuevos",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261213180000_facturacion_cliente_asocia_comprobantes.sql",
+      "version": "20261213180000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261116141823",
+      "nombre_remoto": "facturacion_cliente_asocia_comprobantes",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261213190000_facturacion_archivar_comprobantes.sql",
+      "version": "20261213190000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261116142930",
+      "nombre_remoto": "facturacion_archivar_comprobantes",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261213200000_facturacion_acceso_por_usuario.sql",
+      "version": "20261213200000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261116163959",
+      "nombre_remoto": "facturacion_acceso_por_usuario",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261214100000_bajas_confirmadas_fuera_del_banco.sql",
+      "version": "20261214100000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261113155042",
+      "nombre_remoto": "bajas_confirmadas_fuera_del_banco",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261214110000_cobranzas_intereses_informativos.sql",
+      "version": "20261214110000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Objetos presentes en producción (auditoría 19-20/11); falta registrarla."
+    },
+    {
+      "archivo": "20261215100000_completar_legajo_vigilador.sql",
+      "version": "20261215100000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261118160150",
+      "nombre_remoto": "completar_legajo_vigilador",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261215120000_gestion_casos_tablero.sql",
+      "version": "20261215120000",
+      "estado": "FALTA_REALMENTE",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "0/12 objetos en producción al 19/11 (gestion_reglas, gestion_casos, ...). No registrar hasta aplicarla."
+    },
+    {
+      "archivo": "20261216100000_ia_control_imagenes_conteos.sql",
+      "version": "20261216100000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Objetos presentes en producción (auditoría 19-20/11); falta registrarla."
+    },
+    {
+      "archivo": "20261216110000_ultima_supervision_permiso_por_objetivo.sql",
+      "version": "20261216110000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Objetos presentes en producción (auditoría 19-20/11); falta registrarla."
+    },
+    {
+      "archivo": "20261216120000_gestion_documental_administracion.sql",
+      "version": "20261216120000",
+      "estado": "FALTA_REALMENTE",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "0/39 objetos en producción al 19/11 (gestion_documentos, ...). No registrar hasta aplicarla."
+    },
+    {
+      "archivo": "20261216150000_vigia_salud.sql",
+      "version": "20261216150000",
+      "estado": "APLICADA_A_MANO_SIN_REGISTRO",
+      "version_remota": null,
+      "nombre_remoto": null,
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Objetos presentes en producción (auditoría 19-20/11); falta registrarla."
+    },
+    {
+      "archivo": "20261217120000_whatsapp_envios_sin_turno.sql",
+      "version": "20261217120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261120013538",
+      "nombre_remoto": "whatsapp_envios_sin_turno",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261218120000_ronda_guiada.sql",
+      "version": "20261218120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261120013641",
+      "nombre_remoto": "ronda_guiada",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261219100000_facturacion_anular_cobro.sql",
+      "version": "20261219100000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261119120036",
+      "nombre_remoto": "facturacion_anular_cobro",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Registrada por el MCP con otra versión (auditoría 19-20/11)."
+    },
+    {
+      "archivo": "20261219110000_facturacion_licitaciones_horas.sql",
+      "version": "20261219110000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261119125303",
+      "nombre_remoto": "facturacion_licitaciones_horas",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Compartía la versión 20261219110000 con legajo_solo_domicilio_obligatorio; ésta conserva el número."
+    },
+    {
+      "archivo": "20261219120000_legajo_solo_domicilio_obligatorio.sql",
+      "version": "20261219120000",
+      "estado": "REGISTRADA_OTRA_VERSION",
+      "version_remota": "20261120015502",
+      "nombre_remoto": "legajo_solo_domicilio_obligatorio",
+      "formato": "OK",
+      "version_compartida_con": [],
+      "es_rollback": false,
+      "nota": "Renumerada el 20/11/2026 desde 20261219110000 (versión duplicada con facturacion_licitaciones_horas). Se mantiene en la serie del repo (no 20261120015502) para que un db reset la corra después de 20261215100000_completar_legajo_vigilador."
     }
   ],
   "remoto": [
@@ -3964,6 +4329,132 @@
       "tipo": "VERSION_MCP"
     },
     {
+      "version": "20261111121351",
+      "name": "legajo_datos_solicitud",
+      "archivo": "20261211100000_legajo_datos_solicitud.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261111125302",
+      "name": "postulacion_completar_legajo",
+      "archivo": "20261211110000_postulacion_completar_legajo.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261112144912",
+      "name": "anular_registro_manual_auditoria_usuario",
+      "archivo": "20261213100000_anular_registro_manual_auditoria_usuario.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261112150915",
+      "name": "facturacion_renglones_texto_horas_facturar",
+      "archivo": "20261213110000_facturacion_renglones_texto_horas_facturar.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261112155321",
+      "name": "facturacion_fecha_emision_prefactura",
+      "archivo": "20261213120000_facturacion_fecha_emision_prefactura.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261112173824",
+      "name": "anular_fichaje_gps",
+      "archivo": null,
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261112184058",
+      "name": "reactivar_turno_anulado_trabajado",
+      "archivo": "20261213140000_reactivar_turno_anulado_trabajado.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261112184507",
+      "name": "reactivar_turno_supervisor",
+      "archivo": "20261213150000_reactivar_turno_supervisor.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261113155042",
+      "name": "bajas_confirmadas_fuera_del_banco",
+      "archivo": "20261214100000_bajas_confirmadas_fuera_del_banco.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261116134044",
+      "name": "facturacion_corregir_texto_comprobante",
+      "archivo": "20261213160000_facturacion_corregir_texto_comprobante.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261116134105",
+      "name": "facturacion_vincular_objetivos_nuevos",
+      "archivo": "20261213170000_facturacion_vincular_objetivos_nuevos.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261116141823",
+      "name": "facturacion_cliente_asocia_comprobantes",
+      "archivo": "20261213180000_facturacion_cliente_asocia_comprobantes.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261116142930",
+      "name": "facturacion_archivar_comprobantes",
+      "archivo": "20261213190000_facturacion_archivar_comprobantes.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261116163959",
+      "name": "facturacion_acceso_por_usuario",
+      "archivo": "20261213200000_facturacion_acceso_por_usuario.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261118160150",
+      "name": "completar_legajo_vigilador",
+      "archivo": "20261215100000_completar_legajo_vigilador.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261118160236",
+      "name": "completar_legajo_dni_cualquier_estado",
+      "archivo": null,
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261119120036",
+      "name": "facturacion_anular_cobro",
+      "archivo": "20261219100000_facturacion_anular_cobro.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261119125303",
+      "name": "facturacion_licitaciones_horas",
+      "archivo": "20261219110000_facturacion_licitaciones_horas.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261120013538",
+      "name": "whatsapp_envios_sin_turno",
+      "archivo": "20261217120000_whatsapp_envios_sin_turno.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261120013641",
+      "name": "ronda_guiada",
+      "archivo": "20261218120000_ronda_guiada.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
+      "version": "20261120015502",
+      "name": "legajo_solo_domicilio_obligatorio",
+      "archivo": "20261219120000_legajo_solo_domicilio_obligatorio.sql",
+      "tipo": "VERSION_MCP"
+    },
+    {
       "version": "20261202120000",
       "name": "20261202120000_facturacion_grupos_factura",
       "archivo": "20261202120000_facturacion_grupos_factura.sql",
@@ -4042,7 +4533,18 @@
       "tipo": "MISMA_VERSION"
     }
   ],
-  "remoto_sin_archivo": [],
+  "remoto_sin_archivo": [
+    {
+      "version": "20261112173824",
+      "name": "anular_fichaje_gps",
+      "nota": "Aplicada por el MCP; no hay archivo en supabase/migrations."
+    },
+    {
+      "version": "20261118160236",
+      "name": "completar_legajo_dni_cualquier_estado",
+      "nota": "Aplicada por el MCP; no hay archivo en supabase/migrations."
+    }
+  ],
   "fuera_de_migrations": [
     {
       "archivo": "supabase/cron/20261009170000_documentacion_alertas_cron.sql",
