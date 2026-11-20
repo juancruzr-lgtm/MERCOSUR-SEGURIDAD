@@ -112,6 +112,8 @@ import {
 import { ETIQUETA_ESTADO as ETIQUETA_CUMPLIMIENTO, resumenCorto } from '@/lib/cumplimiento'
 import RondaAlertasPanel from '@/components/rondas/RondaAlertasPanel'
 import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
+import RondasPausadasPlegable from '@/components/rondas/RondasPausadasPlegable'
+import BotonVolver, { usePilaSecciones } from '@/components/navegacion/BotonVolver'
 import ControlPlanillasPanel from '@/components/planillas/ControlPlanillasPanel'
 import ControlImagenesIAPanel from '@/components/ia/ControlImagenesIAPanel'
 import ControlSupervisionesPanel from '@/components/supervisiones/ControlSupervisionesPanel'
@@ -13322,9 +13324,7 @@ function RevisionOperativa({ guardias, objetivos, turnos, registros, setTurnos, 
 
       {/* Una ronda pausada NO genera alerta: sin este bloque, la ausencia de
           alertas acá es indistinguible de una ronda cumplida. */}
-      <div style={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:24 }}>
-        <RondasPausadasPanel objetivoId={null} />
-      </div>
+      <RondasPausadasPlegable estilo={{ background:alpha(brandColors.surface, 0.92), border:`1px solid ${brandColors.border}`, borderRadius:8, padding:16, marginBottom:24 }} />
 
       {/* Cierre de turno modal */}
       {turnoParaCerrar && (
@@ -14208,6 +14208,7 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
   const [supervisorZonas, setSupervisorZonas] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [filtros, setFiltros] = useState<Record<string, any>>({})
+  const volverSeccion = usePilaSecciones(page, setPage)
 
   // Entrada por URL: permite linkear a una sección con filtros ya puestos, por
   // ejemplo desde la planilla del guardia hacia la bandeja de revisión filtrada
@@ -14600,6 +14601,7 @@ const esGuardia = esRolGuardia(user.rol)
                   + cartel que vuelve, sin bloquear. Lleva a /estatuto (el shell
                   admin no tiene Mi Legajo). */}
               {user?.id && <AvisoEstatuto empleadoId={user.id} destino="/estatuto" />}
+              <BotonVolver page={page} onVolver={volverSeccion} />
               {page === 'dashboard' && <Dashboard guardias={guardias} objetivos={objetivos} turnos={turnos} registros={registros} novedades={novedades} onNavigate={navegarConFiltro} />}
               {page === 'guardias' && <Guardias guardias={guardias} setGuardias={setGuardias} filtroActivo={filtros.guardias} limpiarFiltro={() => limpiarFiltro('guardias')} esAdmin={alcanceDe(user) === 'todas'} usuarioId={user?.id ?? null} rol={user?.rol ?? null} puedePleno={tieneCapacidad(user, 'gestionar_personal')} puedeOperativo={tieneCapacidad(user, 'gestionar_personal_operativo')} user={user} />}
               {page === 'objetivos' && <Objetivos objetivos={objetivos} setObjetivos={setObjetivos} turnos={turnos} checklistPlantillas={checklistPlantillas} zonasOperativas={zonasOperativas} filtroActivo={filtros.objetivos} limpiarFiltro={() => limpiarFiltro('objetivos')} guardias={guardias} registros={registros} supervisiones={supervisionesAdmin} novedades={novedades} user={user} onNavigate={navegarConFiltro} />}
