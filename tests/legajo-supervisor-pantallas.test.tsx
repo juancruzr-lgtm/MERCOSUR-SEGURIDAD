@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { BarraPosicionTurno, GraficoPorHora, MatrizDiaHora } from '@/components/supervisiones/GraficosHorarioSupervision'
 import type { FranjaHoraria } from '@/lib/legajo-supervisor'
+import { ITEMS_MENU_ADMIN } from '@/lib/menu-admin-nav'
 
 const filas = (p: Partial<FranjaHoraria>[] = []): FranjaHoraria[] =>
   Array.from({ length: 24 }, (_, hora) => ({ hora, enTurno: 0, cubrioOtro: 0, sinProgramacion: 0, fueraTurno: 0, minutosServicio: 0, ...(p[hora] ?? {}) }))
@@ -44,7 +45,15 @@ describe('cableado (sobre el código fuente)', () => {
   const legajo = readFileSync(join(__dirname, '..', 'app', 'guardias', '[id]', 'LegajoPage.tsx'), 'utf8')
   it('menú, horarios y ranking usan el mismo permiso (la lista de la base)', () => {
     expect(app).toContain("const veLegajoSupervisores = useAccesoLegajoSupervisores(user)")
-    expect(app).toContain("...(veLegajoSupervisores ? [{ id:'evaluacion_supervisores'")
+    // El menú (lib/menu-admin-nav) recibe el mismo permiso y lo usa tal cual.
+    expect(app).toMatch(/construirNavAdmin\(\{[\s\S]*?\n\s+veLegajoSupervisores,\n[\s\S]*?\}\)/)
+    const ev = ITEMS_MENU_ADMIN.find(i => i.id === 'evaluacion_supervisores')!
+    const todo = { supervisarZona: true, supervisarTodasZonas: true, verDashboardGerencial: true, gestionarPersonal: true,
+      prepararLiquidacion: true, gestionarFacturacion: true, gestionaDatosSensibles: true, esAdminPleno: true,
+      veLegajoSupervisores: true, tableroGerenciaVisible: true, configuracionGuiadaVisible: true, gestionAdministracionVisible: true }
+    const nada = Object.fromEntries(Object.keys(todo).map(k => [k, false])) as typeof todo
+    expect(ev.visible({ ...nada, veLegajoSupervisores: true })).toBe(true)
+    expect(ev.visible({ ...todo, veLegajoSupervisores: false })).toBe(false)
     expect(app).toContain("page === 'evaluacion_supervisores' && veLegajoSupervisores && <EvaluacionSupervisoresPanel verRanking={veLegajoSupervisores} />")
     expect(app).not.toContain('puedeVerEvaluacionSupervisores')
     expect(app).not.toContain('puedeVerLegajoSupervisores')
