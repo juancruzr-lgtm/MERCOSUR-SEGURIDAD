@@ -77,6 +77,7 @@ import RastreoGpsVistaAdmin from '@/components/supervisor/RastreoGpsVistaAdmin'
 import { registraGpsEnVistaAdmin } from '@/lib/supervisor-gps'
 import GuardiaMobile from '@/components/guardia/GuardiaMobile'
 import MenuAdmin from '@/components/ui/MenuAdmin'
+import { construirNavAdmin } from '@/lib/menu-admin-nav'
 import { ANCHO_MENU_ADMIN, guardarColapsado, leerColapsadoGuardado, modoMenuAdmin } from '@/lib/menu-admin'
 import ObservacionSistema from '@/components/observacion/ObservacionSistema'
 import ReferenciasIAPanel from '@/components/ia/ReferenciasIAPanel'
@@ -9945,7 +9946,7 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro, o
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', marginBottom:24 }}>
-        <div style={{ flex:1 }}><div style={S.title}>Servicios por Objetivo</div><div style={S.sub2}>{servicios.length} servicios configurados</div></div>
+        <div style={{ flex:1 }}><div style={S.title}>Servicios por objetivo</div><div style={S.sub2}>{servicios.length} servicios configurados</div></div>
         <button style={{ ...S.btn, ...S.btnPrimary }} onClick={abrirNuevo}>+ Nuevo Servicio</button>
       </div>
 
@@ -13881,7 +13882,7 @@ function TurnosBase() {
 
       <div style={s.header}>
         <div style={s.title}>
-          🧱 Turnos Base
+          🧱 Horarios tipo (turnos base)
         </div>
 
         <button
@@ -14518,82 +14519,24 @@ const esGuardia = esRolGuardia(user.rol)
       { id:'asistencia', icon:'✅', label:'Mi Asistencia' },
       { id:'novedades', icon:'📋', label:'Mis Novedades' },
     ]}
-  ] : [
-    { section:'GENERAL', items:[
-      { id:'dashboard', icon:'📊', label:'Panel Principal' },
-      // Tablero de Gerencia (vista previa): sólo con el interruptor encendido y
-      // alcance operativo (supervisor de zona o superior). Ver docs/tablero-gerencia.
-      ...(tableroGerenciaVisible() && (tieneCapacidad(user, 'supervisar_zona') || tieneCapacidad(user, 'supervisar_todas_zonas') || tieneCapacidad(user, 'ver_dashboard_gerencial'))
-        ? [{ id:'tablero_gerencia', icon:'🧭', label:'Tablero de Gerencia' }] : []),
-    ] },
-    { section:'OPERACIONES', items:[
-      { id:'guardias', icon:'👮', label:'Guardias' },
-      { id:'objetivos', icon:'🏢', label:'Objetivos' },
-      { id:'turnos', icon:'📅', label:'Turnos' },
-      { id:'asistencia', icon:'✅', label:'Asistencia' },
-      { id:'rondas', icon:'🔁', label:'Rondas' },
-      { id:'pagina_gps', icon:'📍', label:'Página GPS' },
-    ]},
-    { section:'ADMINISTRACIÓN', items:[
-      { id:'cierre_operativo', icon:'🌙', label:'Cierre Operativo' },
-      { id:'revision_operativa', icon:'🛂', label:'Revisión Operativa' },
-      { id:'revision_fotos_ia', icon:'🤖', label:'Revisión de fotos IA' },
-      { id:'revision_planillas', icon:'📑', label:'Revisión de planillas' },
-      { id:'supervisiones', icon:'☑️', label:'Supervisiones' },
-      // Evaluación de supervisores (ranking, horarios y legajos): sólo la lista
-      // de autorizaciones individuales de la base, igual para todo (JC 19/10).
-      ...(veLegajoSupervisores ? [{ id:'evaluacion_supervisores', icon:'🎯', label:'Evaluación de supervisores' }] : []),
-      // Salidas anticipadas: la resuelve Supervisión (su zona) o un superior.
-      // Administración la ve; quién puede resolver lo decide la base.
-      ...(tieneCapacidad(user, 'supervisar_zona') || tieneCapacidad(user, 'supervisar_todas_zonas')
-        ? [{ id:'salidas_anticipadas', icon:'🚪', label:'Salidas anticipadas' }] : []),
-      // «Novedades» (novedades operativas agrupadas por mes) salió del menú:
-      // no se usaba. La página sigue existiendo para los accesos desde el Panel
-      // y el Centro Operativo («Ver todas»). No es Novedades del Personal.
-      // Novedades del Personal: gestión de novedades laborales por rango/cantidad.
-      // Gateado por capacidad gestionar_personal (Administración/Gerencia).
-      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'novedades_personal', icon:'🧑‍💼', label:'Novedades del Personal' }] : []),
-      // «AFIP · Empleados» salió del menú: la corroboración ARCA vive en el
-      // legajo de cada persona (Legajo Digital → Datos personales).
-      // Estatuto Interno: versiones, aceptaciones y pendientes. Documentación
-      // laboral → Administración/Gerencia (gestionar_personal), no Supervisión.
-      ...(tieneCapacidad(user, 'gestionar_personal') ? [{ id:'estatuto_interno', icon:'📜', label:'Estatuto Interno' }] : []),
-      // Protocolos por objetivo: control general (versiones, aprobación,
-      // lecturas, diferencias). Administración/Gerencia y jefatura operativa;
-      // el supervisor lo ve en la ficha de cada objetivo de su zona.
-      ...(tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas') ? [{ id:'protocolos', icon:'📋', label:'Protocolos' }] : []),
-      ...(configuracionGuiadaVisible() && (tieneCapacidad(user, 'gestionar_personal') || tieneCapacidad(user, 'supervisar_todas_zonas') || tieneCapacidad(user, 'supervisar_zona')) ? [{ id:'configuracion_guiada', icon:'🧩', label:'Configurar objetivos' }] : []),
-      // Legajo Digital (una sola entrada): datos personales, documentación
-      // (revisar, situación, vencimientos, auditoría) y archivo histórico.
-      // Sólo puesto Administración o Gerencia (sin overrides). No Supervisión.
-      ...(gestionaDatosSensibles(user) ? [{ id:'legajo_digital', icon:'🗂️', label:'Legajo Digital' }] : []),
-      ...(gestionAdministracionVisible() && gestionaDatosSensibles(user) ? [{ id:'gestion_administracion', icon:'📋', label:'Administración' }] : []),
-      { id:'reportes', icon:'📈', label:'Reportes' },
-      { id:'supervisores_guardia', icon:'🔔', label:'Supervisores de Guardia' },
-      { id:'solicitudes_admin', icon:'📝', label:'Solicitudes Admin' },
-    ]},
-    // GESTIÓN ECONÓMICA → Liquidación: Gerencia + Administración (capacidad
-    // preparar_liquidacion). NO Dirección Operativa/Jefe/supervisores/vigiladores.
-    // El acceso a Liquidación NO abre banco/Finanzas (capacidad económica aparte).
-    // Facturación: capacidad gestionar_facturacion (Gerencia, delegada y Administración).
-    ...(tieneCapacidad(user, 'preparar_liquidacion') || tieneCapacidad(user, 'gestionar_facturacion') ? [{ section:'GESTIÓN ECONÓMICA', items:[
-      ...(tieneCapacidad(user, 'preparar_liquidacion') ? [{ id:'liquidacion', icon:'💵', label:'Liquidación' }] : []),
-      ...(tieneCapacidad(user, 'gestionar_facturacion') ? [{ id:'facturacion', icon:'🧾', label:'Facturación' }] : []),
-    ]}] : []),
-    // CONFIGURACIÓN y SISTEMA: sólo ADMIN PLENO (jefe/dir. operativa/administración/
-    // gerencia + admin legado). Un supervisor con acceso a la interfaz admin
-    // (p.ej. Sergio) NO las ve: su vista queda operativa. No cambia a nadie que
-    // ya las veía.
-    ...(esAdminPleno(user) ? [{ section:'CONFIGURACIÓN', items:[
-      { id:'servicios_objetivo', icon:'📅', label:'Programación' },
-      { id:'checklists', icon:'☑️', label:'Checklists' },
-      { id:'turnos_base', icon:'⏰', label:'Turnos Base' },
-      { id:'zonas_operativas', icon:'🗺️', label:'Zonas operativas' },
-      { id:'referencias_ia', icon:'🖼️', label:'Referencias IA' },
-    ]}, { section:'SISTEMA', items:[
-      { id:'observacion', icon:'🔭', label:'Observación del Sistema' },
-    ]}] : []),
-  ]
+  ] : construirNavAdmin({
+    // Grupos, nombres y reglas de visibilidad: lib/menu-admin-nav.ts. Los ids
+    // y los permisos son los mismos de siempre (?page= y enlaces de WhatsApp).
+    supervisarZona: tieneCapacidad(user, 'supervisar_zona'),
+    supervisarTodasZonas: tieneCapacidad(user, 'supervisar_todas_zonas'),
+    verDashboardGerencial: tieneCapacidad(user, 'ver_dashboard_gerencial'),
+    gestionarPersonal: tieneCapacidad(user, 'gestionar_personal'),
+    prepararLiquidacion: tieneCapacidad(user, 'preparar_liquidacion'),
+    gestionarFacturacion: tieneCapacidad(user, 'gestionar_facturacion'),
+    gestionaDatosSensibles: gestionaDatosSensibles(user),
+    // CONFIGURACIÓN: sólo ADMIN PLENO. Un supervisor con acceso a la interfaz
+    // admin no la ve: su vista queda operativa.
+    esAdminPleno: esAdminPleno(user),
+    veLegajoSupervisores,
+    tableroGerenciaVisible: tableroGerenciaVisible(),
+    configuracionGuiadaVisible: configuracionGuiadaVisible(),
+    gestionAdministracionVisible: gestionAdministracionVisible(),
+  })
 
   // Secciones que esta persona puede abrir por URL: las del menú y los accesos
   // sin entrada propia que ya se abren desde el Panel o desde enlaces (con el
