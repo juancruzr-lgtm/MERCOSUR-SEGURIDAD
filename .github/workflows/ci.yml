@@ -34,6 +34,11 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Pruebas (vitest)
+        # La suite se escribió y corre en hora argentina. En UTC falla
+        # tests/supervisiones-indice.test.ts ("el borde son 7 días exactos"):
+        # objetivoEnOperacion usa la fecha local del proceso. Pendiente aparte.
+        env:
+          TZ: America/Argentina/Buenos_Aires
         run: npx vitest run
 
       - name: Guard de migraciones
