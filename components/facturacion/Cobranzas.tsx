@@ -145,7 +145,7 @@ function Conciliacion({ clientes }: { clientes: any[] }) {
 }
 
 function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombreCliente: string }) {
-  const [d, setD] = useState<{ saldos: any[]; cobros: any[]; rets: any[]; aps: any[]; si: any[]; cond: CondicionesPago | null }>({ saldos: [], cobros: [], rets: [], aps: [], si: [], cond: null })
+  const [d, setD] = useState<{ saldos: any[]; cobros: any[]; rets: any[]; aps: any[]; si: any[]; cargos: any[]; cond: CondicionesPago | null }>({ saldos: [], cobros: [], rets: [], aps: [], si: [], cargos: [], cond: null })
   const primeraCarga = useRef(true)
   // Id del cobro generado en la pantalla: si el alta se reintenta, el servidor devuelve el mismo cobro.
   const idCobro = useRef(crypto.randomUUID())
@@ -153,22 +153,27 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
   const [ret, setRet] = useState({ impuesto: 'ganancias', certificado: '', fecha: '', importe: '', orden_pago: '', estado: 'certificado_recibido' })
   const [ap, setAp] = useState({ origen: '', destino: '', importe: '' })
   const [si, setSi] = useState({ fecha: '', importe: '', detalle: '', documento_id: '' })
+  // Cargo sin factura (remito): id generado en la pantalla para que el alta sea idempotente.
+  const idCargo = useRef(crypto.randomUUID())
+  const [cargo, setCargo] = useState({ fecha: '', periodo: '', descripcion: '', importe: '' })
   const { ocupado, correr, Mensaje } = useAccion()
 
   async function cargar() {
-    const [saldosArca, cobros, rets, si2, cond] = await Promise.all([
+    const [saldosArca, cobros, rets, si2, cond, cargos] = await Promise.all([
       // Todas las facturas del cliente (pagas e impagas), por fecha de emisión y número.
       leer('fact_v_saldos', q => q.eq('cliente_id', clienteId).order('fecha_emision').order('punto_venta').order('numero')),
       leer('fact_cobros', q => q.eq('cliente_id', clienteId).order('fecha')),
       leer('fact_retenciones', q => q.eq('cliente_id', clienteId).order('fecha')),
       leer('fact_saldos_iniciales', q => q.eq('cliente_id', clienteId)),
       cargarCondicionesPago(),
+      // Remitos y otros cargos sin factura, con su saldo (no son comprobantes fiscales).
+      leer('fact_v_cargos', q => q.eq('cliente_id', clienteId).order('fecha')).catch(() => []),
     ])
     // Vencimiento según el contrato vigente del cliente (si cambia el plazo, cambia solo).
     const saldos = conVencimiento(saldosArca, cond)
     const ids = [...cobros.map(c => c.id), ...rets.map(r => r.id)]
     const aps = ids.length ? await leer('fact_aplicaciones', q => q.or(`cobro_id.in.(${cobros.map(c => c.id).join(',') || '00000000-0000-0000-0000-000000000000'}),retencion_id.in.(${rets.map(r => r.id).join(',') || '00000000-0000-0000-0000-000000000000'})`).order('created_at')) : []
-    setD({ saldos, cobros, rets, aps, si: si2, cond })
+    setD({ saldos, cobros, rets, aps, si: si2, cargos, cond })
     // Después de cargar un cobro, aplicar o revertir, los intereses se recalculan con los pagos nuevos.
     if (primeraCarga.current) primeraCarga.current = false; else setRecarga(x => x + 1)
   }
@@ -176,6 +181,7 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
 
   const aplicado = (campo: 'cobro_id' | 'retencion_id', id: string) => d.aps.filter(a => a[campo] === id && !a.revertida_at).reduce((s, a) => s + Number(a.importe_c), 0)
   const deuda = d.saldos.reduce((s, x) => s + Math.max(0, Number(x.saldo_c)), 0)
+  const deudaCargos = d.cargos.reduce((s, x) => s + Math.max(0, Number(x.saldo_c)), 0)
   const nv = (s: any) => numeroVisible({ tipo: s.tipo, puntoVenta: s.punto_venta, numero: Number(s.numero) })
 
   // Intereses por mora a hoy: informativos, para avisarle al cliente (no se registran ni se facturan solos).
@@ -210,6 +216,11 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
   async function aplicar(origen: string, destino: string, importe: number | null) {
     if (!origen || !destino || !importe || importe <= 0) throw new Error('Elegí el cobro (o la retención), la factura y el importe a aplicar')
     const [ot, oid] = origen.split(':'); const [dt, did] = destino.split(':')
+    if (dt === 'g') {
+      if (ot !== 'cobro') throw new Error('A un remito sólo se le aplican cobros (las retenciones van a facturas)')
+      await rpc('fact_aplicar_cargo', { p_cobro_id: oid, p_cargo_id: did, p_importe_c: importe, p_evidencia: { manual: true } })
+      return
+    }
     await rpc('fact_aplicar', { p_origen_tipo: ot, p_origen_id: oid, p_comprobante_id: dt === 'c' ? did : null, p_saldo_inicial_id: dt === 's' ? did : null, p_importe_c: importe, p_evidencia: { manual: true } })
   }
 
@@ -218,6 +229,7 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
       <Mensaje />
       <div style={{ ...S.fila, ...S.sub }}>
         <span>Deuda en comprobantes: <b style={{ color: '#e2e8f0' }}>{pesos(deuda)}</b></span>
+        {d.cargos.length > 0 && <span>· Remitos sin factura: <b style={{ color: '#e2e8f0' }}>{pesos(deudaCargos)}</b> · Total: <b style={{ color: '#e2e8f0' }}>{pesos(deuda + deudaCargos)}</b></span>}
         <span>· Intereses por mora a hoy (informativo): {intereses.cargando ? '…' : <b style={{ color: AMBAR }}>{pesos(totalInteres)}</b>}</span>
         {!intereses.cargando && totalInteres > 0 && <button style={{ ...S.btn2, padding: '2px 8px' }} onClick={() => correr(async () => {
           const texto = textoCliente()
@@ -241,6 +253,33 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
             {d.si.map(s => <tr key={s.id}><td style={S.td}>Saldo inicial</td><td style={S.td}>{fecha(s.fecha)}</td><td style={S.num}>{pesos(s.importe_c)}</td><td style={S.td}><a href="#" style={{ color: '#93c5fd' }} onClick={e => { e.preventDefault(); correr(() => abrirDocumento(s.documento_id)) }}>respaldo</a></td></tr>)}
           </tbody></table>
 
+          <h4 style={{ ...S.sub, marginTop: 12 }}>REMITOS / CARGOS SIN FACTURA</h4>
+          <div style={S.sub}>Lo que el cliente paga y no se factura. No es un comprobante fiscal: sólo cuenta para la deuda del cliente.</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>
+            {d.cargos.map(g => <tr key={g.id}><td style={S.td}>{g.descripcion}{g.periodo ? <div style={S.sub}>{g.periodo}</div> : null}</td><td style={S.td}>{fecha(g.fecha)}</td>
+              <td style={S.num}>{pesos(g.importe_c)}</td>
+              <td style={S.num}>{Number(g.saldo_c) <= 0 ? <span style={{ color: '#4ade80' }}>pagado</span> : <b>{pesos(g.saldo_c)}</b>}
+                <div><button style={{ ...S.btnPeligro, padding: '1px 6px' }} disabled={ocupado} onClick={() => {
+                  const m = prompt(`Anular el cargo "${g.descripcion}" por ${pesos(g.importe_c)}.
+Se revierten los pagos aplicados (quedan disponibles). Queda en el historial.
+
+Motivo:`)
+                  if (m) correr(async () => { await rpc('fact_cargo_anular', { p_id: g.id, p_motivo: m }); await cargar() }, 'Cargo anulado')
+                }}>Anular</button></div></td></tr>)}
+          </tbody></table>
+          <div style={S.fila}>
+            <input style={S.input} type="date" value={cargo.fecha} onChange={e => setCargo({ ...cargo, fecha: e.target.value })} />
+            <input style={{ ...S.input, width: 90 }} type="month" title="Mes del servicio" value={cargo.periodo} onChange={e => setCargo({ ...cargo, periodo: e.target.value })} />
+            <input style={{ ...S.input, flex: 1 }} placeholder="Descripción (ej. Remito junio)" value={cargo.descripcion} onChange={e => setCargo({ ...cargo, descripcion: e.target.value })} />
+            <input style={{ ...S.input, width: 130 }} placeholder="Importe" value={cargo.importe} onChange={e => setCargo({ ...cargo, importe: e.target.value })} />
+            <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
+              const importe = centavosDe(cargo.importe)
+              if (!cargo.fecha || !importe || importe <= 0 || cargo.descripcion.trim().length < 3) throw new Error('Completá fecha, descripción e importe del remito')
+              await rpc('fact_cargo_registrar', { p_id: idCargo.current, p_datos: { cliente_id: clienteId, fecha: cargo.fecha, periodo: cargo.periodo, descripcion: cargo.descripcion, importe_c: importe } })
+              idCargo.current = crypto.randomUUID(); setCargo({ fecha: '', periodo: '', descripcion: '', importe: '' }); await cargar()
+            }, 'Remito cargado')}>+ Remito</button>
+          </div>
+
           <h4 style={{ ...S.sub, marginTop: 12 }}>APLICAR</h4>
           <div style={S.fila}>
             <select style={S.input} value={ap.origen} onChange={e => setAp({ ...ap, origen: e.target.value })}>
@@ -252,6 +291,7 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
               <option value="">Destino…</option>
               {d.saldos.filter(s => Number(s.saldo_c) > 0).map(s => <option key={s.comprobante_id} value={`c:${s.comprobante_id}`}>{nv(s)} · saldo {pesos(s.saldo_c)}</option>)}
               {d.si.filter(s => s.estado === 'vigente').map(s => <option key={s.id} value={`s:${s.id}`}>Saldo inicial</option>)}
+              {d.cargos.filter(g => Number(g.saldo_c) > 0).map(g => <option key={g.id} value={`g:${g.id}`}>{g.descripcion} · saldo {pesos(g.saldo_c)}</option>)}
             </select>
             <input style={{ ...S.input, width: 130 }} placeholder="Importe" value={ap.importe} onChange={e => setAp({ ...ap, importe: e.target.value })} />
             <button style={S.btn2} disabled={ocupado} onClick={() => correr(async () => {
@@ -261,7 +301,7 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
           </div>
           <h4 style={{ ...S.sub, marginTop: 12 }}>APLICACIONES</h4>
           {d.aps.map(a => <div key={a.id} style={{ ...S.fila, fontSize: 13, opacity: a.revertida_at ? 0.5 : 1 }}>
-            {fecha(a.created_at)} · {a.cobro_id ? 'cobro' : 'retención'} {pesos(a.importe_c)} · {a.vinculo}{a.revertida_at ? ` · revertida: ${a.revertida_motivo}` : ''}
+            {fecha(a.created_at)} · {a.cobro_id ? 'cobro' : 'retención'} {pesos(a.importe_c)}{a.cargo_id ? ` → ${d.cargos.find(g => g.id === a.cargo_id)?.descripcion ?? 'remito'}` : ''} · {a.vinculo}{a.revertida_at ? ` · revertida: ${a.revertida_motivo}` : ''}
             {!a.revertida_at && <button style={{ ...S.btnPeligro, padding: '2px 8px' }} onClick={() => { const m = prompt('Motivo de la reversión'); if (m) correr(async () => { await rpc('fact_aplicacion_revertir', { p_id: a.id, p_motivo: m }); await cargar() }, 'Revertida') }}>Revertir</button>}
           </div>)}
         </div>
