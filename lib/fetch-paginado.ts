@@ -58,3 +58,26 @@ export async function fetchPaginadoResult<T = any>(
     return { data: [], error }
   }
 }
+
+/**
+ * Para consultas `.in(columna, ids)` con listas largas: parte los ids en lotes
+ * (una URL con 1.000 uuids pasa los ~37 KB y PostgREST/el proxy la rechazan) y
+ * pagina cada lote, porque un lote también puede devolver más de 1000 filas.
+ * Devuelve `{ data, error }` como supabase-js; el primer error corta todo.
+ */
+export async function fetchEnLotesResult<T = any, Id = string>(
+  ids: Id[],
+  consulta: (lote: Id[], desde: number, hasta: number) => PromiseLike<{ data: T[] | null; error: any }>,
+  tamLote: number = 200,
+): Promise<{ data: T[]; error: any }> {
+  const todas: T[] = []
+  try {
+    for (let i = 0; i < ids.length; i += tamLote) {
+      const lote = ids.slice(i, i + tamLote)
+      todas.push(...await fetchPaginado<T>((desde, hasta) => consulta(lote, desde, hasta)))
+    }
+    return { data: todas, error: null }
+  } catch (error) {
+    return { data: [], error }
+  }
+}

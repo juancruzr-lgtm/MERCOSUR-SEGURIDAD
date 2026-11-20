@@ -12,6 +12,7 @@ import type { NovedadDia } from '@/lib/clasificacion-dia'
 import { feriadoDelTurno, resumirFeriados, turnoCuentaEnFeriado } from '@/lib/feriados'
 import { construirResumenGuardiaVigiladores, plantillaLiquidacionResumenGuardia, grupoDeResumen, type GrupoResumen } from '@/lib/resumen-guardia'
 import { fetchPaginado, fetchPaginadoResult } from '@/lib/fetch-paginado'
+import { cargarTurnosVentana, ventanaTurnosPantalla } from '@/lib/turnos-carga'
 import {
   ETIQUETA_ESTADO_REVISION, REVISION_SIN_TOCAR, claveRevision,
   construirRevisionPorClave, esPendienteDeAccion, estadoRevision,
@@ -4613,13 +4614,21 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
   // programación, hecha desde el legajo del objetivo) puede haber cambiado
   // desde que se cargaron los datos globales al iniciar sesión. Sin esto no
   // se vería "sin F5" al navegar acá después de publicar.
+  //
+  // Paginado (lib/turnos-carga): PostgREST corta en 1000 filas sin error y
+  // noviembre 2026 ya tenía 1.120 turnos — «Mes actual» mostraba 1.000 (F-03).
+  const recargarTurnos = async (): Promise<string | null> => {
+    const { desde, hastaExclusivo } = ventanaTurnosPantalla(fechaHoyArgentina())
+    const { data, error: errCarga } = await cargarTurnosVentana<Turno>(supabase, desde, hastaExclusivo)
+    if (errCarga) return errCarga.message ?? String(errCarga)
+    setTurnos(data)
+    return null
+  }
   useEffect(() => {
     let vigente = true
-    const desdeStr = `${mesActualArgentina()}-01`
-    const hastaISO = inicioMesSiguienteArgISO()
-    const hastaStr = hastaISO.slice(0, 10)
-    void supabase.from('turnos').select('*').gte('fecha', desdeStr).lt('fecha', hastaStr).order('fecha', { ascending: false })
-      .then(({ data }) => { if (vigente && data) setTurnos(data) })
+    void recargarTurnos().then(err => {
+      if (vigente && err) setError(`No se pudieron cargar los turnos: ${err}`)
+    })
     return () => { vigente = false }
   }, [])
 
@@ -4914,10 +4923,8 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       setAsignandoVacante(false)
       return
     }
-    const { data: turnosActualizados } = await supabase
-      .from('turnos').select('*')
-      .order('fecha', { ascending: false }).order('hora_inicio', { ascending: true })
-    if (turnosActualizados) setTurnos(turnosActualizados)
+    const errRefresco = await recargarTurnos()
+    if (errRefresco) setError(`Vigilador asignado, pero no se pudo refrescar la lista: ${errRefresco}`)
     setMensaje('✓ Vigilador asignado sobre la vacante programada')
     setAsignandoVacante(false)
     setVacantesAlta(null)
@@ -4990,14 +4997,8 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       const filtroDestino = filtroFechaTurnosIncluye(filtroFecha, payload.fecha)
         ? filtroFecha
         : filtroFechaTurnosParaFecha(payload.fecha)
-      const { data: turnosActualizados, error: refreshError } = await supabase
-        .from('turnos')
-        .select('*')
-        .order('fecha', { ascending: false })
-        .order('hora_inicio', { ascending: true })
-
-      if (turnosActualizados) setTurnos(turnosActualizados)
-      if (refreshError) setError(`Turno creado, pero no se pudo refrescar la lista: ${refreshError.message}`)
+      const refreshError = await recargarTurnos()
+      if (refreshError) setError(`Turno creado, pero no se pudo refrescar la lista: ${refreshError}`)
 
       setFiltroFecha(filtroDestino)
       setMensaje('✓ Turno creado correctamente')
@@ -5097,6 +5098,9 @@ function Turnos({ turnos, setTurnos, guardias, objetivos, registros, filtroActiv
       )}
 
       <div style={S.card}>
+        <div style={{ fontSize:12, color:'#64748b', marginBottom:8 }}>
+          {filtrados.length.toLocaleString('es-AR')} {filtrados.length === 1 ? 'turno' : 'turnos'} · {rangoFecha.label}
+        </div>
         <table style={S.table}>
           <thead>
             <tr>
@@ -7301,7 +7305,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
       // (fuente de SUPERVISIONES). La ventana de supervisiones es por
       // created_at en hora argentina, igual que las ve el supervisor.
       supabase.from('supervisores_guardia').select('supervisor_id, fecha, hora_inicio, hora_fin, zona, estado').gte('fecha', desdeStr).lte('fecha', hastaStr).eq('estado', 'activo'),
-      supabase.from('supervisiones').select('supervisor_id, objetivo_id, estado, created_at').gte('created_at', `${desdeStr}T00:00:00-03:00`).lt('created_at', `${new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10)}T00:00:00-03:00`),
+      // Paginado: un mes de supervisiones ya pasa las 500 y PostgREST corta en 1000 sin error.
+      fetchPaginadoResult((desde, hasta) => supabase.from('supervisiones').select('id, supervisor_id, objetivo_id, estado, created_at').gte('created_at', `${desdeStr}T00:00:00-03:00`).lt('created_at', `${new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10)}T00:00:00-03:00`).order('created_at').order('id').range(desde, hasta)),
     ]).then(([turnos, registros, nl, acept, soli, revi, noctExc, supGuardias, supervisionesRes]) => {
       setTurnosReportes(turnos)
       setRegistrosReportes(registros)
@@ -9602,12 +9607,17 @@ function ServiciosObjetivo({ guardias, objetivos, filtroActivo, limpiarFiltro, o
     // deduplicación y en las superposiciones del guardia sugerido.
     const fechaConsultaDesde = fechasVecinasTurno(fechaDesde)[0]
     const fechaConsultaHasta = fechasVecinasTurno(fechaHasta)[2]
+    // Paginado: la ventana de noviembre 2026 ya tenía 1.160 turnos y PostgREST
+    // corta en 1000 sin error — la deduplicación no veía el resto y la vista
+    // previa podía proponer turnos que ya existían.
     const [{ data: turnosExistentes, error: errTurnos }, { data: puestosPorObjetivo, error: errPuestos }] = await Promise.all([
-      supabase
+      fetchPaginadoResult((desde, hasta) => supabase
         .from('turnos')
         .select('id, objetivo_id, puesto_id, guardia_id, servicio_base_id, fecha, hora_inicio, hora_fin, estado, tipo_evento')
         .gte('fecha', fechaConsultaDesde)
-        .lte('fecha', fechaConsultaHasta),
+        .lte('fecha', fechaConsultaHasta)
+        .order('id')
+        .range(desde, hasta)),
       obtenerPuestosActivosDeObjetivos(serviciosActivos.map((s: any) => s.objetivo_id)),
     ])
     if (errTurnos || errPuestos || !puestosPorObjetivo) {
@@ -14061,12 +14071,16 @@ export default function AppPage({ perfilInicial }: { perfilInicial?: Usuario | n
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(desde, hasta)),
-      supabase
+      // Paginado: el 20/11/2026 el mes ya iba por 517 visitas; a fin de mes
+      // se acerca al tope silencioso de 1000 de PostgREST.
+      fetchPaginadoResult<SupervisionRankingAdmin>((desde, hasta) => supabase
         .from('supervisiones')
         .select('id, objetivo_id, supervisor_id, estado, created_at')
         .gte('created_at', inicioMes)
         .lt('created_at', inicioMesSiguiente)
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(desde, hasta)),
       // Última supervisión por objetivo. El .limit(5000) no servía: PostgREST
       // corta en 1000 igual, sin avisar, y con 1.253 supervisiones se perdían
       // 253 — objetivos que figuraban "sin supervisar nunca" por truncamiento.
