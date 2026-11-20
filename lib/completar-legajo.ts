@@ -12,6 +12,8 @@ import type { LecturaDni } from '@/lib/dni-lectura'
 export interface PendienteLegajo {
   pedir: boolean
   faltan?: string[]
+  /** Opcionales vacíos que la lectura del DNI puede proponer (no frenan). */
+  vacios?: string[]
   por_confirmar?: number
   dni?: boolean
   dni_rechazo?: string | null
