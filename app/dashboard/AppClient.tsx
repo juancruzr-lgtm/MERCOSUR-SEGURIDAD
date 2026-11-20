@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import NuevaPassword from '@/components/auth/NuevaPassword'
 import { supabase, formatHoras, calcAlertaEntrada, calcAlertaSalida, calcHorasTrabajadas } from '@/lib/supabase'
+import { omitidosQueQuedanEnCero, registrosVigentesTurno, tramosInicialesCierre, type TramoCierre } from '@/lib/cerrar-turno-tramos'
 import { alcanceDe, shellDeUsuario, tieneCapacidad, esAdminPleno, esGerenciaReal, puedeAdministrarRondas } from '@/lib/capacidades'
 import { effectiveGuardia, effectiveObjetivo, scoreRegistro, selectRegistroPrincipal, horasRealesRegistro, horasLiquidablesRegistro, resolverLineaLiquidacion, esPeriodoTransicion, mejorRegistroPorTurno, turnosReconocidosHastaCorte, totalHorasLiquidables, fechaCorteOperativa, turnosOperativosDelMes, turnosExigiblesHastaAhora, totalPendiente, turnoExigible, finProgramadoTurno } from '@/lib/liquidacion'
 import { ETIQUETA_TURNO_SIN_OBLIGACION, admiteAccionesDePlanilla, repartirPendiente, resolverTurnoDeFila } from '@/lib/planilla-acciones'
@@ -12226,32 +12227,24 @@ function CerrarTurnoModal({ turno, registros, guardias, objetivos, onClose, onSu
   onClose: () => void
   onSuccess: (turnoId: string, revisadoPor: string) => void
 }) {
-  type Tramo = { id: string; guardia_id: string; hora_inicio: string; hora_fin: string }
+  type Tramo = TramoCierre
 
-  const turnoRegs = registros.filter(r => r.turno_id === turno.id && r.hora_entrada_real)
+  // Todos los registros vigentes del turno (también los que tienen horas reconocidas
+  // sin horario). Sólo interfaz: las horas las sigue calculando cerrar_turno.
+  const turnoRegs = registrosVigentesTurno(turno, registros as any[])
   const guardiasActivos = guardias.filter((g: Usuario) => esRolGuardia(g.rol) && g.estado === 'activo')
 
-  const tramosIniciales = (): Tramo[] => {
-    if (turnoRegs.length > 0) {
-      return turnoRegs.map(r => ({
-        id: crypto.randomUUID(),
-        guardia_id: effectiveGuardia(r) ?? '',
-        hora_inicio: ((r.hora_entrada_final ?? r.hora_entrada_real) ?? '').slice(0, 5),
-        hora_fin:    ((r.hora_salida_final  ?? r.hora_salida_real)  ?? '').slice(0, 5),
-      }))
-    }
-    return [{
-      id: crypto.randomUUID(),
-      guardia_id: turno.guardia_id ?? '',
-      hora_inicio: turno.hora_inicio.slice(0, 5),
-      hora_fin:    turno.hora_fin.slice(0, 5),
-    }]
-  }
+  const tramosIniciales = (): Tramo[] => tramosInicialesCierre(turno, registros as any[], () => crypto.randomUUID())
 
   const [tramos, setTramos] = useState<Tramo[]>(tramosIniciales)
   const [comentario, setComentario] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError]   = useState('')
+  // Quién quedaría con 0 horas por no figurar en los tramos (regla vigente de cerrar_turno).
+  const omitidos = omitidosQueQuedanEnCero(turno, registros as any[], tramos)
+  const [confirmaOmitidos, setConfirmaOmitidos] = useState(false)
+  const claveOmitidos = omitidos.map(o => o.guardia_id).sort().join(',')
+  useEffect(() => { setConfirmaOmitidos(false) }, [claveOmitidos])
 
   const calcHorasTramo = (hi: string, hf: string): number => {
     if (!hi || !hf) return 0
@@ -12284,6 +12277,10 @@ function CerrarTurnoModal({ turno, registros, guardias, objetivos, onClose, onSu
   const aprobar = async () => {
     const err = validar()
     if (err) { setError(err); return }
+    if (omitidos.length > 0 && !confirmaOmitidos) {
+      setError('Confirmá expresamente que los vigiladores no incluidos quedan con 0 horas, o agregalos a los tramos.')
+      return
+    }
     setLoading(true)
     setError('')
     try {
@@ -12332,13 +12329,18 @@ function CerrarTurnoModal({ turno, registros, guardias, objetivos, onClose, onSu
         {/* Fichajes GPS */}
         {turnoRegs.length > 0 && (
           <div style={{ marginBottom:16 }}>
-            <div style={{ ...S.label, marginBottom:6 }}>Fichajes GPS (solo lectura)</div>
+            <div style={{ ...S.label, marginBottom:6 }}>Registros del turno (solo lectura)</div>
             {turnoRegs.map(r => (
               <div key={r.id} style={{ background:'#0a1628', border:'1px solid #1e2d42', borderRadius:8, padding:'8px 12px', marginBottom:6,
                 fontSize:12, color:'#94a3b8', display:'flex', gap:16, flexWrap:'wrap' as const }}>
                 <span><strong style={{ color:'#cbd5e1' }}>{nombreGuardia(effectiveGuardia(r))}</strong></span>
-                <span>Entrada: <strong>{r.hora_entrada_real?.slice(0,5) ?? '—'}</strong></span>
-                <span>Salida: <strong>{r.hora_salida_real?.slice(0,5) ?? 'en curso'}</strong></span>
+                {r.hora_entrada_real ? (<>
+                  <span>Entrada: <strong>{r.hora_entrada_real?.slice(0,5) ?? '—'}</strong></span>
+                  <span>Salida: <strong>{r.hora_salida_real?.slice(0,5) ?? 'en curso'}</strong></span>
+                </>) : (
+                  <span style={{ color:'#fbbf24' }}>Sin horario registrado</span>
+                )}
+                <span>Horas reconocidas: <strong>{horasLiquidablesRegistro(turno, r)}h</strong></span>
                 {r.gps_ingreso_estado === 'fuera_radio' && <span style={{ color:'#f87171' }}>⚠ fuera de radio</span>}
               </div>
             ))}
@@ -12371,6 +12373,13 @@ function CerrarTurnoModal({ turno, registros, guardias, objetivos, onClose, onSu
               </div>
             )
           })}
+          {tramos.some(t => t.sinHorario && (!t.hora_inicio || !t.hora_fin)) && (
+            <div style={{ fontSize:12, color:'#fbbf24', margin:'2px 0 8px' }}>
+              {tramos.filter(t => t.sinHorario && (!t.hora_inicio || !t.hora_fin)).map(t => (
+                <div key={t.id}>Sin horario registrado: {nombreGuardia(t.guardia_id)} (horas reconocidas hoy: {t.horasReferencia ?? 0}h). Completá el horario del tramo o quitalo.</div>
+              ))}
+            </div>
+          )}
           <button type="button" onClick={agregarTramo}
             style={{ ...S.btn, ...S.btnSecondary, marginTop:4, fontSize:12, padding:'6px 14px' }}>
             + Agregar tramo
@@ -12390,6 +12399,19 @@ function CerrarTurnoModal({ turno, registros, guardias, objetivos, onClose, onSu
             placeholder="Ej.: Relevo parcial confirmado con cliente" />
         </div>
 
+        {omitidos.length > 0 && (
+          <div style={{ background:'rgba(245,158,11,.10)', border:'1px solid rgba(245,158,11,.45)', borderRadius:8, padding:12, fontSize:13, color:'#fcd34d', marginBottom:12 }}>
+            <div style={{ fontWeight:700, marginBottom:6 }}>Atención: estos vigiladores no figuran en los tramos</div>
+            {omitidos.map(o => (
+              <div key={o.guardia_id}>• {nombreGuardia(o.guardia_id)}: hoy tiene <strong>{o.horas}h</strong> reconocidas → al aprobar quedará con <strong>0 horas</strong> en este turno (el fichaje original se conserva).</div>
+            ))}
+            <label style={{ display:'flex', gap:8, alignItems:'center', marginTop:8, cursor:'pointer', color:'#e2e8f0' }}>
+              <input type="checkbox" checked={confirmaOmitidos} onChange={e => setConfirmaOmitidos(e.target.checked)} />
+              Confirmo que estos vigiladores quedan con 0 horas en este turno.
+            </label>
+          </div>
+        )}
+
         {error && (
           <div style={{ background:'rgba(239,68,68,.12)', border:'1px solid rgba(239,68,68,.35)', color:'#fca5a5',
             borderRadius:8, padding:10, fontSize:13, marginBottom:12 }}>{error}</div>
@@ -12397,7 +12419,7 @@ function CerrarTurnoModal({ turno, registros, guardias, objetivos, onClose, onSu
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
           <button type="button" style={{ ...S.btn, ...S.btnSecondary, justifyContent:'center' }} onClick={onClose}>Cancelar</button>
-          <button type="button" style={{ ...S.btn, ...S.btnPrimary, justifyContent:'center' }} onClick={aprobar} disabled={loading}>
+          <button type="button" style={{ ...S.btn, ...S.btnPrimary, justifyContent:'center', opacity: omitidos.length > 0 && !confirmaOmitidos ? .6 : 1 }} onClick={aprobar} disabled={loading || (omitidos.length > 0 && !confirmaOmitidos)}>
             {loading ? 'Aprobando...' : 'Aprobar turno'}
           </button>
         </div>

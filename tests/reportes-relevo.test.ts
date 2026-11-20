@@ -17,6 +17,15 @@ describe('Relevo desde Reportes', () => {
     expect(modal).toMatch(/rpc\('cerrar_turno'/)
     expect(modal).toContain('p_tramos:     tramos.map(t => ({ guardia_id: t.guardia_id, hora_inicio: t.hora_inicio, hora_fin: t.hora_fin })),')
   })
+  it('Cerrar turno exige confirmación expresa si alguien quedaría en 0 y no envía horas propias', () => {
+    const modal = bloque('function CerrarTurnoModal(')
+    expect(modal).toContain('omitidosQueQuedanEnCero(')
+    expect(modal).toContain('if (omitidos.length > 0 && !confirmaOmitidos) {')
+    expect(modal).toContain('disabled={loading || (omitidos.length > 0 && !confirmaOmitidos)}')
+  })
+  it('Revisión Operativa y Reportes usan el mismo componente', () => {
+    expect(src.split('<CerrarTurnoModal').length - 1).toBe(2)
+  })
   it('la carga manual sigue enviando horas = null (sin cambio de regla)', () => {
     expect(bloque('function CargarAsistenciaManualModal(')).toContain('p_horas_liquidables: null,')
   })
