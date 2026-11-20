@@ -6874,6 +6874,167 @@ function Asistencia({ registros, setRegistros, turnos, setTurnos, guardias, obje
   )
 }
 
+// Anulación de una carga manual desde Reportes → «Planilla empleado». Misma RPC
+// y mismo texto que el modal de Asistencia (anular_registro_manual: motivo
+// obligatorio, horas_liquidables = 0, auditoría; nada se borra). El registro
+// queda en la planilla marcado como anulado, igual que en la base.
+function AnularCargaManualModal({ registro, onClose, setRegistros }: { registro: RegistroAsistencia; onClose: () => void; setRegistros: any }) {
+  const [motivo, setMotivo] = useState('')
+  const [anulando, setAnulando] = useState(false)
+
+  const anular = async () => {
+    const motivoLimpio = motivo.trim()
+    if (!motivoLimpio || registro.tipo_registro !== 'carga_manual') return
+    setAnulando(true)
+    try {
+      const { error } = await supabase.rpc('anular_registro_manual', {
+        p_registro_id: registro.id,
+        p_motivo: motivoLimpio,
+      })
+      if (error) throw error
+      setRegistros((prev: RegistroAsistencia[]) => prev.map((r: RegistroAsistencia) => r.id === registro.id
+        ? { ...r, registro_anulado_at: new Date().toISOString(), registro_anulado_motivo: motivoLimpio, horas_liquidables: 0 } as RegistroAsistencia
+        : r))
+      onClose()
+    } catch (e: any) {
+      alert(e.message || 'Error al anular')
+    } finally {
+      setAnulando(false)
+    }
+  }
+
+  return (
+    <Modal title="Anular registro manual" onClose={onClose}>
+      <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
+        Esta acción anulará lógicamente el registro de carga manual. Las horas liquidables pasarán a 0. La operación queda registrada en auditoría.
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>Motivo de anulación *</label>
+        <textarea
+          style={{ ...S.input, resize: 'vertical', minHeight: 80 }}
+          value={motivo}
+          onChange={e => setMotivo(e.target.value)}
+          placeholder="Ingrese el motivo de la anulación..."
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose}>Cancelar</button>
+        <button
+          style={{ ...S.btn, background: '#991b1b', color: '#fca5a5', border: '1px solid #7f1d1d', opacity: !motivo.trim() || anulando ? 0.5 : 1 }}
+          disabled={!motivo.trim() || anulando}
+          onClick={anular}
+        >
+          {anulando ? 'Anulando...' : 'Confirmar anulación'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+// Edición de una carga manual (fecha, horario, objetivo) desde Reportes. Misma
+// RPC que Asistencia (corregir_turno_manual_operativo: motivo obligatorio,
+// auditoría de turno y registro).
+function EditarCargaManualModal({ registro, onClose, turnos, setTurnos, setRegistros, objetivos }: { registro: RegistroAsistencia; onClose: () => void; turnos: Turno[]; setTurnos: any; setRegistros: any; objetivos: Objetivo[] }) {
+  const turnoInicial = turnos.find((t: Turno) => t.id === registro.turno_id)
+  const [form, setForm] = useState({
+    fecha: turnoInicial?.fecha || '',
+    objetivo_id: (registro as any).objetivo_final_id ?? turnoInicial?.objetivo_id ?? '',
+    hora_inicio: turnoInicial?.hora_inicio?.slice(0, 5) || '',
+    hora_fin: turnoInicial?.hora_fin?.slice(0, 5) || '',
+    motivo: '',
+  })
+  const [guardando, setGuardando] = useState(false)
+
+  const guardar = async () => {
+    if (!form.motivo.trim()) return
+    const turno = turnos.find((t: Turno) => t.id === registro.turno_id)
+    if (!turno) {
+      alert('No se encontró el turno de este registro entre los cargados. Recargá la pantalla y volvé a intentar.')
+      return
+    }
+    setGuardando(true)
+    try {
+      const cambioFecha = form.fecha !== turno.fecha
+      const cambioHorario = form.hora_inicio !== turno.hora_inicio?.slice(0, 5) || form.hora_fin !== turno.hora_fin?.slice(0, 5)
+      const cambioObjetivo = form.objetivo_id !== ((registro as any).objetivo_final_id ?? turno.objetivo_id)
+      if (!cambioFecha && !cambioHorario && !cambioObjetivo) {
+        onClose()
+        return
+      }
+      const { data, error } = await supabase.rpc('corregir_turno_manual_operativo', {
+        p_operacion_id: crypto.randomUUID(),
+        p_registro_id: registro.id,
+        p_fecha: cambioFecha ? form.fecha : null,
+        p_hora_inicio: cambioHorario ? form.hora_inicio + ':00' : null,
+        p_hora_fin: cambioHorario ? form.hora_fin + ':00' : null,
+        p_objetivo_id: cambioObjetivo ? form.objetivo_id : null,
+        p_motivo: form.motivo.trim(),
+      })
+      if (error) throw error
+      const resultado = data as { turno: { id: string; fecha: string; hora_inicio: string; hora_fin: string; objetivo_id: string }; registro: { id: string; horas_liquidables: number } }
+      setTurnos((prev: Turno[]) => prev.map((t: Turno) => t.id === turno.id ? { ...t, fecha: resultado.turno.fecha, hora_inicio: resultado.turno.hora_inicio, hora_fin: resultado.turno.hora_fin, objetivo_id: resultado.turno.objetivo_id } : t))
+      setRegistros((prev: RegistroAsistencia[]) =>
+        prev.map((r: RegistroAsistencia) => r.id === registro.id ? { ...r, horas_liquidables: resultado.registro.horas_liquidables, objetivo_final_id: cambioObjetivo ? form.objetivo_id : (r as any).objetivo_final_id } : r)
+      )
+      onClose()
+    } catch (e: any) {
+      alert(e.message || 'Error al guardar')
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  return (
+    <Modal title="Editar registro manual" onClose={onClose}>
+      <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
+        Corrección de registro de carga manual. Los cambios quedan registrados en auditoría.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Fecha *</label>
+          <input type="date" style={S.input} value={form.fecha} onChange={e => setForm({ ...form, fecha: e.target.value })} />
+        </div>
+        <div>
+          <label style={S.label}>Objetivo</label>
+          <select style={S.select} value={form.objetivo_id} onChange={e => setForm({ ...form, objetivo_id: e.target.value })}>
+            <option value="">— Sin objetivo —</option>
+            {objetivos.map((o: Objetivo) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Hora inicio</label>
+          <input type="time" style={S.input} value={form.hora_inicio} onChange={e => setForm({ ...form, hora_inicio: e.target.value })} />
+        </div>
+        <div>
+          <label style={S.label}>Hora fin</label>
+          <input type="time" style={S.input} value={form.hora_fin} onChange={e => setForm({ ...form, hora_fin: e.target.value })} />
+        </div>
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>Motivo de corrección *</label>
+        <textarea
+          style={{ ...S.input, resize: 'vertical', minHeight: 80 }}
+          value={form.motivo}
+          onChange={e => setForm({ ...form, motivo: e.target.value })}
+          placeholder="Ingrese el motivo de la corrección..."
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose}>Cancelar</button>
+        <button
+          style={{ ...S.btn, ...S.btnPrimary, opacity: !form.motivo.trim() || !form.fecha || guardando ? 0.5 : 1 }}
+          disabled={!form.motivo.trim() || !form.fecha || guardando}
+          onClick={guardar}
+        >
+          {guardando ? 'Guardando...' : 'Guardar cambios'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
 function Novedades({ novedades, setNovedades, guardias, objetivos, filtroActivo, limpiarFiltro }: any) {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState({ guardia_id:'', objetivo_id:'', tipo:'Rutina', descripcion:'', prioridad:'normal' })
@@ -7056,6 +7217,8 @@ function Novedades({ novedades, setNovedades, guardias, objetivos, filtroActivo,
 
 function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objetivos, novedades, supervisorZonas = [], filtroActivo, limpiarFiltro, user }: any) {
   const [registroCorrigiendo, setRegistroCorrigiendo] = useState<RegistroAsistencia | null>(null)
+  const [cargaManualAnulando, setCargaManualAnulando] = useState<RegistroAsistencia | null>(null)
+  const [cargaManualEditando, setCargaManualEditando] = useState<RegistroAsistencia | null>(null)
   const [turnoParaCargaManual, setTurnoParaCargaManual] = useState<Turno | null>(null)
   const [agregarRegistroContexto, setAgregarRegistroContexto] = useState<{ empleadoId?: string; objetivoId?: string } | null>(null)
   const empleados = guardias.filter((g: Usuario) => g.rol !== 'admin')
@@ -8616,7 +8779,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         {row._registro.tipo_registro === 'carga_manual' && !row._registro.registro_anulado_at && (
                           <button
                             style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#1e40af', color:'#93c5fd', border:'1px solid #1d4ed8' }}
-                            onClick={() => abrirEdicionManual(row._registro)}
+                            onClick={() => setCargaManualEditando(row._registro)}
                           >
                             Editar
                           </button>
@@ -8624,7 +8787,7 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         {row._registro.tipo_registro === 'carga_manual' && !row._registro.registro_anulado_at && (
                           <button
                             style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#7f1d1d', color:'#fca5a5', border:'1px solid #991b1b' }}
-                            onClick={() => { setRegistroAnulando(row._registro); setMotivoAnulacion('') }}
+                            onClick={() => setCargaManualAnulando(row._registro)}
                           >
                             Anular
                           </button>
@@ -9065,6 +9228,18 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
             )}
           </div>
         </div>
+      )}
+
+      {/* La planilla lee turnosReportes/registrosReportes (el mes elegido), no
+          el estado global del mes actual: con el global, editar un mes anterior
+          no encontraba el turno y la planilla no se refrescaba. */}
+      {cargaManualAnulando && (
+        <AnularCargaManualModal registro={cargaManualAnulando} onClose={() => setCargaManualAnulando(null)} setRegistros={setRegistrosReportes} />
+      )}
+
+      {cargaManualEditando && (
+        <EditarCargaManualModal registro={cargaManualEditando} onClose={() => setCargaManualEditando(null)}
+          turnos={turnosReportes} setTurnos={setTurnosReportes} setRegistros={setRegistrosReportes} objetivos={objetivos} />
       )}
 
       {registroCorrigiendo && (
