@@ -3,6 +3,7 @@ import { repairEmployeeAuthUser } from '../_lib/auth-repair'
 import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
 import { tieneCapacidad, alcanceDe } from '@/lib/capacidades'
 import { marcarCambioObligatorio } from '../_lib/acceso-password'
+import { verificarDestino } from '../_lib/destino-usuario'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -22,6 +23,10 @@ export async function POST(req: NextRequest) {
     const usuarioId = body?.usuario_id
 
     if (!usuarioId) return NextResponse.json({ error: 'usuario_id es obligatorio' }, { status: 400 })
+
+    // Crear/reparar el acceso puede revincular la cuenta Auth: misma regla jerárquica.
+    const bloqueo = await verificarDestino(admin.client, acceso.perfil, usuarioId)
+    if (bloqueo) return bloqueo
 
     const { data: usuario, error: usuarioError } = await admin.client
       .from('usuarios')

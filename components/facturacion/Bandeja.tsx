@@ -22,6 +22,7 @@ import { recalcular, useOperacion, type Periodo } from './periodo'
 import { nombreDelMes } from '@/lib/facturacion/periodo-seguro'
 import { fechaArgentina, rangoFechasMes } from '@/lib/periodo-argentina'
 import { plazoPagoDias, vtoPagoAlEmitir } from '@/lib/facturacion/vto-arca'
+import { claveObjetivo, usePropuestasHoras, type PedidoPropuesta } from './usePropuestasHoras'
 
 const ESTADOS_FILTRO: Array<[string, string]> = [
   ['para_revisar', 'Para revisar'], ['sin_aceptar', 'Horas sin aceptar'],
@@ -40,7 +41,10 @@ type Base = Omit<FilaRevision, 'objetivos' | 'prefactura'> & {
   clave: string; contratoId: string; contrato: { id: string; regla_periodo?: string | null; dia_corte?: number | null }; cliente: any; nombre: string; incluye: string[]; huerfana: boolean
   objetivos: Array<{ objetivoId: string; nombre: string }>
 }
-const claveObj = (contratoId: string, objetivoId: string) => `${contratoId}:${objetivoId}`
+const claveObj = claveObjetivo
+/** Objetivos con horas (no abono) de las filas, para pedir sus propuestas. */
+const pedidosDe = (rs: Base[]): PedidoPropuesta[] =>
+  rs.filter(r => !r.huerfana && !sinHoras(r)).flatMap(r => r.objetivos.map(o => ({ contratoId: r.contratoId, objetivoId: o.objetivoId })))
 
 /** Factura real (emitida fuera de la app) con la que se concilió la prefactura y la diferencia con lo calculado. */
 function Conciliacion({ c }: { c: any }) {
@@ -66,7 +70,9 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
   const escribir = periodo.habilitado && !enCurso
   const porQue = !periodo.habilitado ? periodo.motivo ?? 'Período protegido' : enCurso ? 'Hay un recálculo en curso de este período' : undefined
   const [base, setBase] = useState<Base[]>([])
-  const [props, setProps] = useState<Record<string, { propuesta: any; error: string | null }>>({})
+  // Propuestas de Reportes: bajo demanda (botón o al abrir los turnos de una fila), con caché por mes y
+  // abortadas al salir de la pantalla. Abrir Prefacturas ya no dispara ningún cálculo (F-13).
+  const { props, calcular, calculando, calculadoAt } = usePropuestasHoras(mes)
   const [aprob, setAprob] = useState<any[]>([])
   const [trat, setTrat] = useState<Record<string, TratamientoDescubiertos>>({})
   const [notas, setNotas] = useState<Record<string, string>>({})
@@ -76,10 +82,9 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
   const [facturar, setFacturar] = useState<Record<string, { h: string; motivo: string }>>({})
   const [sel, setSel] = useState<string | null>(null)
   const [filtro, setFiltro] = useState('')
-  const [calculando, setCalculando] = useState(false)
   const { ocupado, correr, Mensaje } = useAccion()
 
-  async function cargar(conPropuestas = true) {
+  async function cargar() {
     const { desde: inicioMes, ultimoDia: finMes } = rangoFechasMes(mes)
     const [pref, contratos, vincs, tarifas, aps, desc] = await Promise.all([
       leer('fact_prefacturas', q => q.eq('periodo_mes', mes).neq('estado', 'descartada').order('created_at'),
@@ -113,22 +118,6 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
     rs.sort((a, b) => `${a.cliente?.razon_social} ${a.nombre}`.localeCompare(`${b.cliente?.razon_social} ${b.nombre}`))
     setBase(rs)
     setAprob(aps)
-    if (!conPropuestas) return
-    // Propuestas de Reportes de cada objetivo con horas, de a 4 para no saturar el servidor.
-    const pendientes = rs.filter(r => !sinHoras(r)).flatMap(r => r.objetivos.map(o => ({ contratoId: r.contratoId, objetivoId: o.objetivoId })))
-    setProps({})
-    setCalculando(true)
-    const acum: Record<string, { propuesta: any; error: string | null }> = {}
-    let i = 0
-    await Promise.all(Array.from({ length: 4 }, async () => {
-      while (i < pendientes.length) {
-        const x = pendientes[i++]
-        try { acum[claveObj(x.contratoId, x.objetivoId)] = { propuesta: await api('horas', { accion: 'proponer', contrato_id: x.contratoId, objetivo_id: x.objetivoId, mes }), error: null } }
-        catch (e: any) { acum[claveObj(x.contratoId, x.objetivoId)] = { propuesta: null, error: e?.message ?? 'No se pudo calcular' } }
-        setProps({ ...acum })
-      }
-    }))
-    setCalculando(false)
   }
   useEffect(() => { correr(() => cargar()) }, [mes]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -167,13 +156,22 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
   return (
     <div>
       <div style={{ ...S.card, ...S.fila }}>
+        {(() => {
+          // Bajo demanda: cada propuesta tarda de 3 a 11 s en el servidor. Si ya están todas, recalcula todas.
+          const pedidos = pedidosDe(base)
+          const faltan = pedidos.filter(x => { const v = props[claveObj(x.contratoId, x.objetivoId)]; return !v || v.error }).length
+          return <button style={S.btn2} disabled={calculando || !pedidos.length} data-testid="calcular-propuestas"
+            title="Calcula las horas propuestas de Reportes de cada objetivo. Puede tardar unos minutos; se cancela si salís de la pantalla."
+            onClick={() => { void calcular(pedidos, { forzar: faltan === 0 }) }}>
+            {calculando ? 'Calculando propuestas…' : faltan === 0 && pedidos.length ? 'Recalcular propuestas' : `Calcular propuestas (${faltan})`}</button>
+        })()}
         <button style={S.btn} disabled={ocupado || calculando || !elegibles.length || !escribir} title={porQue} onClick={() => {
           if (!confirm(`ACEPTAR TODOS — ${nombreDelMes(mes)}\n\nSe aceptan las horas de ${elegibles.length} comprobante(s) sin nada para revisar y después se recalculan las prefacturas del período.\nLo ya aceptado y lo marcado para revisar no se toca.\n\n¿Continuar?`)) return
           correr(async () => {
             const errores: string[] = []
             for (const f of elegibles) { try { await aceptar(f) } catch (e: any) { errores.push(`${f.cliente?.razon_social} · ${f.nombre}: ${e?.message}`) } }
             const r = await recalcular(mes, undefined, setEsperando)
-            await cargar(false); await recargarOperacion()
+            await cargar(); await recargarOperacion()
             const todos = [...errores, ...(r.errores ?? [])]
             if (todos.length) throw new Error(`Revisar: ${todos.join(' · ')}`)
           }, 'Horas aceptadas y prefacturas recalculadas')
@@ -183,7 +181,7 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
           const aviso = operacion?.estado === 'sin_confirmar' ? `\n\nATENCIÓN: el recálculo anterior (${new Date(operacion.iniciada_at).toLocaleString('es-AR')}) quedó SIN CONFIRMAR. Revisá la lista antes de lanzarlo otra vez.` : ''
           if (!confirm(`RECALCULAR PRECIOS — ${nombreDelMes(mes)}\n\nSe recalculan ${n} prefactura(s) del período con las horas aceptadas y las tarifas vigentes. Las aprobadas para emitir y las emitidas no se tocan.\nPuede tardar más de un minuto.${aviso}\n\n¿Continuar?`)) return
           correr(async () => {
-            const r = await recalcular(mes, undefined, setEsperando); await cargar(false); await recargarOperacion()
+            const r = await recalcular(mes, undefined, setEsperando); await cargar(); await recargarOperacion()
             if (r.errores?.length) throw new Error(`Revisar: ${r.errores.join(' · ')}`)
           }, 'Prefacturas recalculadas')
         }}>Recalcular precios</button>
@@ -192,7 +190,8 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
           <option value="">Todos</option>
           {ESTADOS_FILTRO.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <span style={S.sub}>Horas de Reportes (sin capacitación). Lo marcado en amarillo se revisa antes de aceptar.</span>
+        <span style={S.sub}>Horas de Reportes (sin capacitación). Lo marcado en amarillo se revisa antes de aceptar.
+          {calculadoAt ? ` Propuestas calculadas a las ${new Date(calculadoAt).toLocaleTimeString('es-AR')}.` : ' Las propuestas se calculan con «Calcular propuestas» o al ver los turnos de una fila.'}</span>
         <Mensaje />
       </div>
       {!periodo.habilitado && <div style={{ ...S.card, borderColor: '#b91c1c', color: '#fecaca' }}>{periodo.motivo}</div>}
@@ -221,7 +220,9 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
                   <tr style={{ background: verTurnos === f.clave || sel === p?.id ? '#111c35' : undefined }}>
                     <td style={S.td}>{f.cliente?.razon_social}<div style={S.sub}>{f.cliente?.cuit ?? 'sin CUIT'}</div></td>
                     <td style={S.td}>{f.nombre}{f.incluye.length > 0 && <div style={S.sub}>{f.incluye.join(' + ')}</div>}</td>
-                    <td style={S.num}>{sinHoras(f) ? <span style={S.sub}>abono</span> : f.huerfana ? '—' : prop == null ? <span style={S.sub}>{f.objetivos.some(o => o.error) ? 'error' : '…'}</span> : <b>{horas(prop)} h</b>}
+                    <td style={S.num}>{sinHoras(f) ? <span style={S.sub}>abono</span> : f.huerfana ? '—' : prop == null ? (calculando && f.objetivos.some(o => !o.propuesta && !o.error) ? <span style={S.sub}>…</span>
+                      : <>{f.objetivos.some(o => o.error) && <span style={S.sub} title={f.objetivos.map(o => o.error).filter(Boolean).join(' · ')}>error </span>}
+                        <button style={CHICO} onClick={() => { void calcular(pedidosDe([f]), { forzar: true }) }}>{f.objetivos.some(o => o.error) ? 'Reintentar' : 'Calcular'}</button></>) : <b>{horas(prop)} h</b>}
                       {aprobadas > 0 && <div style={{ fontSize: 12, color: alDia ? '#4ade80' : '#fbbf24' }}>aceptadas {horas(aprobadas)} h</div>}
                       {aFacturar !== aprobadas && <div style={{ fontSize: 12, color: '#93c5fd' }}>se facturan {horas(aFacturar)} h (planilla)</div>}</td>
                     <td style={{ ...S.td, whiteSpace: 'nowrap' }}>
@@ -232,12 +233,16 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
                           correr(async () => {
                             await aceptar(f)
                             const r = await recalcular(mes, f.contratoId, setEsperando)
-                            await cargar(false)
+                            await cargar()
                             if (r.errores?.length) throw new Error(`Revisar: ${r.errores.join(' · ')}`)
                           }, 'Horas aceptadas')
                         }}>{alDia ? 'Aceptado ✓' : reemplaza ? 'Reemplazar' : 'Aceptar'}</button>{' '}
                         <button style={CHICO} onClick={() => setVerNota(verNota === f.clave ? null : f.clave)}>{notas[f.clave] ? 'Nota ✎' : 'Nota'}</button>{' '}
-                        <button style={CHICO} onClick={() => setVerTurnos(verTurnos === f.clave ? null : f.clave)}>{verTurnos === f.clave ? 'Ocultar turnos' : 'Ver turnos'}</button>
+                        <button style={CHICO} onClick={() => {
+                          const abre = verTurnos !== f.clave
+                          setVerTurnos(abre ? f.clave : null)
+                          if (abre) void calcular(pedidosDe([f])) // sólo los objetivos de esta fila, si faltan
+                        }}>{verTurnos === f.clave ? 'Ocultar turnos' : 'Ver turnos'}</button>
                         {verNota === f.clave && <div style={{ marginTop: 6 }}><input autoFocus style={{ ...S.input, width: '100%', boxSizing: 'border-box' }} placeholder="Motivo de la corrección u observación"
                           value={notas[f.clave] ?? ''} onChange={e => setNotas({ ...notas, [f.clave]: e.target.value })} /></div>}
                       </>}
@@ -254,7 +259,7 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
                         if (!confirm('VOLVER A FACTURAR este período\n\nLa prefactura descartada vuelve a borrador y se recalcula. ¿Continuar?')) return
                         correr(async () => {
                           await rpc('fact_prefactura_estado', { p_id: f.descartada!.id, p_estado: 'en_preparacion', p_version: f.descartada!.version, p_motivo: 'Se vuelve a facturar el período' })
-                          await recalcular(mes, f.contratoId, setEsperando); await cargar(false)
+                          await recalcular(mes, f.contratoId, setEsperando); await cargar()
                         }, 'El período vuelve a facturarse')
                       }}>Volver a facturar</button>
                       : <span style={S.sub}>sin generar</span>}</td>
@@ -285,7 +290,7 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
                               const guardar = (min: number | null) => correr(async () => {
                                 await rpc('fact_horas_facturar', { p_aprobacion_id: ap.id, p_minutos: min, p_motivo: min == null ? null : ed.motivo })
                                 const { [k]: _, ...resto } = facturar; setFacturar(resto)
-                                const r = await recalcular(mes, f.contratoId, setEsperando); await cargar(false)
+                                const r = await recalcular(mes, f.contratoId, setEsperando); await cargar()
                                 if (r.errores?.length) throw new Error(`Revisar: ${r.errores.join(' · ')}`)
                               }, min == null ? 'Vuelven a facturarse las horas de Reportes' : 'Horas a facturar guardadas')
                               return (
@@ -318,7 +323,7 @@ export default function Bandeja({ mes, usuarios, config, periodo }: { mes: strin
           </tbody>
         </table>
       </div>
-      {actual && <Detalle p={actual} usuarios={usuarios} config={config} periodo={periodo} alCambiar={() => correr(() => cargar(false))} />}
+      {actual && <Detalle p={actual} usuarios={usuarios} config={config} periodo={periodo} alCambiar={() => correr(() => cargar())} />}
     </div>
   )
 }

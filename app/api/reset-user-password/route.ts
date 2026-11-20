@@ -12,6 +12,7 @@ import { tieneCapacidad } from '@/lib/capacidades'
 import { repairEmployeeAuthUser } from '../_lib/auth-repair'
 import { getSupabaseAdmin, normalizeDni, normalizeEmail, resolverPerfil } from '../_lib/employee-auth'
 import { marcarCambioObligatorio } from '../_lib/acceso-password'
+import { verificarDestino } from '../_lib/destino-usuario'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
@@ -28,6 +29,9 @@ export async function POST(req: NextRequest) {
     const usuarioId = body?.usuario_id
 
     if (!usuarioId) return NextResponse.json({ error: 'usuario_id es obligatorio' }, { status: 400 })
+
+    const bloqueo = await verificarDestino(admin.client, acceso.perfil, usuarioId)
+    if (bloqueo) return bloqueo
 
     const { data: usuario, error: usuarioError } = await admin.client
       .from('usuarios')
