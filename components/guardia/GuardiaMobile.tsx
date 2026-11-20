@@ -16,6 +16,12 @@ import { cargarPendiente, type PendienteLegajo } from '@/lib/completar-legajo'
 import PedidoCredencial from '@/components/guardia/PedidoCredencial'
 import AvisoTramite from '@/components/guardia/AvisoTramite'
 import { track, getDeviceContext, initTelemetry } from '@/lib/telemetry'
+import {
+  GPS_INGRESO_TIMEOUT_MS,
+  TOPE_ESPERA_GPS_CONFIRMAR_MS,
+  lanzarGpsEnSegundoPlano,
+  type GpsEnSegundoPlano,
+} from '@/lib/gps-ingreso'
 import RondasGuardiaPanel from '@/components/rondas/RondasGuardiaPanel'
 import ResumenJornadaModal from '@/components/guardia/ResumenJornadaModal'
 import LectorProtocolo from '@/components/protocolos/LectorProtocolo'
@@ -242,7 +248,7 @@ type GpsAcquireResult =
   | { ok: true;  data: GpsData; acq_ms: number }
   | { ok: false; reason: 'denied' | 'timeout' | 'unavailable' | 'unsupported'; acq_ms: number }
 
-function adquirirGps(): Promise<GpsAcquireResult> {
+function adquirirGps(timeoutMs = 10000): Promise<GpsAcquireResult> {
   const t0 = Date.now()
   if (typeof navigator === 'undefined' || !navigator.geolocation)
     return Promise.resolve({ ok: false, reason: 'unsupported', acq_ms: 0 })
@@ -258,7 +264,7 @@ function adquirirGps(): Promise<GpsAcquireResult> {
         const reason = err.code === 1 ? 'denied' : err.code === 3 ? 'timeout' : 'unavailable'
         resolve({ ok: false, reason, acq_ms: Date.now() - t0 })
       },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 }
     )
   })
 }
@@ -611,6 +617,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
   const [ingresoFase, setIngresoFase] = useState<IngresoFase>('idle')
   const [ingresoTurno, setIngresoTurno] = useState<Turno | null>(null)
   const [ingresoGps, setIngresoGps] = useState<GpsData | null>(null)
+  // GPS del ingreso en segundo plano (lib/gps-ingreso): no bloquea las fotos.
+  const [gpsIngresoEstado, setGpsIngresoEstado] = useState<'obteniendo' | 'ok' | 'sin_gps' | null>(null)
+  const gpsIngresoRef = useRef<GpsEnSegundoPlano<GpsAcquireResult> | null>(null)
   const [fotoLibro, setFotoLibro] = useState<{ file: File; url: string } | null>(null)
   const [fotoUniforme, setFotoUniforme] = useState<{ file: File; url: string } | null>(null)
   // Versión ya preparada (comprimida) de cada foto, calculada apenas se saca y
@@ -953,7 +962,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
   // Persiste el intento de ingreso en sessionStorage mientras el supervisor
   // está en la fase de captura de fotos. No persiste File/Blob.
   useEffect(() => {
-    if (!ingresoTurno || !ingresoGps) return
+    // El GPS puede no haber llegado todavía (corre en segundo plano): el intento
+    // se persiste igual, con gps null, para no perder las fotos si se cierra.
+    if (!ingresoTurno) return
     if (ingresoFase === 'idle' || ingresoFase === 'gps' || ingresoFase === 'confirmando') return
 
     // sessionStorage (como antes) + localStorage: si el sistema mata el proceso
@@ -990,7 +1001,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
     const stored = leerFlujo(INGRESO_PENDIENTE_KEY)
     if (!stored) return
 
-    let parsed: { turno_id: string; guardia_id?: string; gps: GpsData; timestamp: number; intento_id: string | null }
+    let parsed: { turno_id: string; guardia_id?: string; gps: GpsData | null; timestamp: number; intento_id: string | null }
     try {
       parsed = JSON.parse(stored)
     } catch {
@@ -999,7 +1010,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
     }
 
     // Intento de otra persona que usó este teléfono: no se restaura.
-    if (!parsed.turno_id || !parsed.gps || !parsed.timestamp || (parsed.guardia_id && parsed.guardia_id !== user.id)) {
+    if (!parsed.turno_id || !parsed.timestamp || (parsed.guardia_id && parsed.guardia_id !== user.id)) {
       borrarFlujo(INGRESO_PENDIENTE_KEY)
       return
     }
@@ -1023,7 +1034,13 @@ export default function GuardiaMobile({ user }: { user: any }) {
 
     ingresoIntentoId.current = parsed.intento_id
     setIngresoTurno(turno)
-    setIngresoGps(parsed.gps)
+    setIngresoGps(parsed.gps ?? null)
+    if (parsed.gps) {
+      setGpsIngresoEstado('ok')
+    } else {
+      // Se cerró antes de que llegara el GPS: se vuelve a pedir en segundo plano.
+      lanzarGpsIngreso(turno, parsed.intento_id)
+    }
     setIngresoFase('foto_libro')
     setIngresoRestaurado(true)
     ingresoStartTime.current = Date.now()
@@ -1053,9 +1070,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
     track('pagina_restaurada', {
       screen: 'ingreso_flow',
       turno_id: turno.id,
-      gps_lat: parsed.gps.latitude,
-      gps_lng: parsed.gps.longitude,
-      gps_accuracy_m: parsed.gps.accuracy,
+      gps_lat: parsed.gps?.latitude,
+      gps_lng: parsed.gps?.longitude,
+      gps_accuracy_m: parsed.gps?.accuracy,
       value_json: {
         fase: 'foto_libro',
         intento_id: parsed.intento_id,
@@ -1124,6 +1141,8 @@ export default function GuardiaMobile({ user }: { user: any }) {
     setIngresoFase('idle')
     setIngresoTurno(null)
     setIngresoGps(null)
+    setGpsIngresoEstado(null)
+    gpsIngresoRef.current = null
     setFotoLibro(prev => { if (prev) URL.revokeObjectURL(prev.url); return null })
     setFotoUniforme(prev => { if (prev) URL.revokeObjectURL(prev.url); return null })
     setIngresoRestaurado(false)
@@ -1167,7 +1186,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
     track('ingreso_started', {
       screen: 'ingreso_flow',
       turno_id: turno.id,
-      value_json: { intento_id: intentoId, permiso_gps: permisoGps },
+      value_json: { intento_id: intentoId, permiso_gps: permisoGps, gps_modo: 'segundo_plano' },
     })
 
     track('gps_requested', {
@@ -1176,8 +1195,29 @@ export default function GuardiaMobile({ user }: { user: any }) {
       value_json: { intento_id: intentoId, tipo: 'ingreso' },
     })
 
-    const gpsResult = await adquirirGps()
+    // El GPS ya NO bloquea: arranca acá y corre mientras se sacan las fotos.
+    // "Confirmar" lo espera como mucho TOPE_ESPERA_GPS_CONFIRMAR_MS.
+    lanzarGpsIngreso(turno, intentoId)
 
+    setIngresoFase('foto_libro')
+  }
+
+  // Lanza la captura de GPS del ingreso sin esperarla. El resultado emite la
+  // misma telemetría y las mismas advertencias que antes (cuando bloqueaba).
+  function lanzarGpsIngreso(turno: Turno, intentoId: string | null) {
+    setGpsIngresoEstado('obteniendo')
+    const enCurso = lanzarGpsEnSegundoPlano(() => adquirirGps(GPS_INGRESO_TIMEOUT_MS), intentoId)
+    gpsIngresoRef.current = enCurso
+    void enCurso.promesa.then(gpsResult => {
+      // Intento cancelado, confirmado o reemplazado: el resultado ya no aplica.
+      if (gpsIngresoRef.current !== enCurso) return
+      procesarResultadoGpsIngreso(turno, intentoId, gpsResult)
+    }, () => {
+      if (gpsIngresoRef.current === enCurso) setGpsIngresoEstado('sin_gps')
+    })
+  }
+
+  function procesarResultadoGpsIngreso(turno: Turno, intentoId: string | null, gpsResult: GpsAcquireResult) {
     if (!gpsResult.ok) {
       // GPS no disponible — modo degradado: advertencia, flujo continúa sin coordenadas.
       // Se registra gps_ingreso_estado = 'gps_no_disponible' al confirmar.
@@ -1203,6 +1243,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
           os: ctx.os_name,
         },
       })
+      setGpsIngresoEstado('sin_gps')
       setMensaje({ texto: 'GPS no disponible — podés continuar. El ingreso se registrará sin ubicación.', tipo: 'warn' })
       setTimeout(() => setMensaje(null), 5000)
     } else {
@@ -1231,6 +1272,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
       }
 
       setIngresoGps(gps)
+      setGpsIngresoEstado('ok')
 
       const ctx = getDeviceContext()
       track('ingreso_flujo_iniciado', {
@@ -1249,8 +1291,6 @@ export default function GuardiaMobile({ user }: { user: any }) {
         },
       })
     }
-
-    setIngresoFase('foto_libro')
   }
 
   // La compresión vive en lib/comprimir-imagen (una sola, con perfiles por uso).
@@ -1265,7 +1305,26 @@ export default function GuardiaMobile({ user }: { user: any }) {
     const intentoId  = ingresoIntentoId.current
     const hora       = horaActual()
     const objetivo   = getObjetivo(ingresoTurno.objetivo_id)
-    const auditoria  = calcularAuditoriaRadioGps(ingresoGps, objetivo)
+    // GPS en segundo plano: si todavía no llegó, se espera un tope CORTO y, si
+    // no, se sigue sin ubicación (el GPS sólo informa, no traba).
+    let gpsIngreso: GpsData | null = ingresoGps
+    const gpsEnCurso = gpsIngresoRef.current
+    if (!gpsIngreso && gpsEnCurso) {
+      const esperaDesde = Date.now()
+      const r = gpsEnCurso.resultado() ?? await gpsEnCurso.esperar(TOPE_ESPERA_GPS_CONFIRMAR_MS)
+      if (r?.ok) gpsIngreso = r.data
+      track('gps_espera_confirmar', {
+        screen: 'ingreso_flow',
+        turno_id: ingresoTurno.id,
+        duration_ms: Date.now() - esperaDesde,
+        value_json: {
+          intento_id: intentoId,
+          resultado: r ? (r.ok ? 'ok' : ('reason' in r ? r.reason : 'sin_lectura')) : 'sin_resultado_al_tope',
+          tope_ms: TOPE_ESPERA_GPS_CONFIRMAR_MS,
+        },
+      })
+    }
+    const auditoria  = calcularAuditoriaRadioGps(gpsIngreso, objetivo)
 
     // ── PASO 1: Crear o reutilizar registro de asistencia ─────────────────────
     let registroId: string
@@ -1299,18 +1358,18 @@ export default function GuardiaMobile({ user }: { user: any }) {
           ...payloadBase,
           distancia_ingreso_metros: auditoria.distancia,
           gps_ingreso_estado: auditoria.estado,
-          latitud_ingreso: ingresoGps?.latitude,
-          longitud_ingreso: ingresoGps?.longitude,
-          precision_ingreso: ingresoGps?.accuracy,
+          latitud_ingreso: gpsIngreso?.latitude,
+          longitud_ingreso: gpsIngreso?.longitude,
+          precision_ingreso: gpsIngreso?.accuracy,
         })
         .select('id')
         .single()
 
       let usedLegacyGps = false
-      if (error && esErrorColumnaGps(error) && ingresoGps) {
+      if (error && esErrorColumnaGps(error) && gpsIngreso) {
         const retry = await supabase
           .from('registros_asistencia')
-          .insert({ ...payloadBase, lat_entrada: ingresoGps.latitude, lng_entrada: ingresoGps.longitude })
+          .insert({ ...payloadBase, lat_entrada: gpsIngreso.latitude, lng_entrada: gpsIngreso.longitude })
           .select('id')
           .single()
         data  = retry.data
@@ -1340,9 +1399,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
         screen: 'ingreso_flow',
         turno_id: ingresoTurno.id,
         registro_id: registroId,
-        gps_lat: ingresoGps?.latitude,
-        gps_lng: ingresoGps?.longitude,
-        gps_accuracy_m: ingresoGps?.accuracy,
+        gps_lat: gpsIngreso?.latitude,
+        gps_lng: gpsIngreso?.longitude,
+        gps_accuracy_m: gpsIngreso?.accuracy,
         gps_status: auditoria.estado,
         gps_distance_m: auditoria.distancia ?? undefined,
         value_json: { intento_id: intentoId, legacy_gps: usedLegacyGps },
@@ -1575,9 +1634,9 @@ export default function GuardiaMobile({ user }: { user: any }) {
       turno_id: ingresoTurno.id,
       registro_id: registroId,
       duration_ms: ingresoStartTime.current ? Date.now() - ingresoStartTime.current : undefined,
-      gps_lat: ingresoGps?.latitude,
-      gps_lng: ingresoGps?.longitude,
-      gps_accuracy_m: ingresoGps?.accuracy,
+      gps_lat: gpsIngreso?.latitude,
+      gps_lng: gpsIngreso?.longitude,
+      gps_accuracy_m: gpsIngreso?.accuracy,
       gps_status: auditoria.estado,
       gps_distance_m: auditoria.distancia ?? undefined,
       result: 'exito',
@@ -1585,7 +1644,7 @@ export default function GuardiaMobile({ user }: { user: any }) {
     })
 
     setMensaje({
-      texto: `✓ Entrada registrada a las ${hora} · ${mensajeAuditoriaRadio(auditoria, ingresoGps)}`,
+      texto: `✓ Entrada registrada a las ${hora} · ${mensajeAuditoriaRadio(auditoria, gpsIngreso)}`,
       tipo: auditoria.estado === 'fuera_radio' ? 'warn' : 'ok',
     })
     setTimeout(() => setMensaje(null), 5000)
@@ -1889,11 +1948,20 @@ export default function GuardiaMobile({ user }: { user: any }) {
                 <div style={S.overlayTitle}>
                   {ingresoFase === 'foto_libro' ? 'Libro de guardia' : 'Uniforme'}
                 </div>
-                <div style={{ color: '#94a3b8', fontSize: 13, marginBottom: 24 }}>
+                <div style={{ color: '#94a3b8', fontSize: 13, marginBottom: gpsIngresoEstado ? 8 : 24 }}>
                   {ingresoFase === 'foto_libro'
                     ? 'Tomá una foto del libro de guardia abierto en la página de hoy.'
                     : 'Tomá una foto de tu uniforme completo.'}
                 </div>
+                {gpsIngresoEstado && (
+                  <div style={{ color: gpsIngresoEstado === 'sin_gps' ? '#fbbf24' : '#64748b', fontSize: 12, marginBottom: 16 }} role="status">
+                    {gpsIngresoEstado === 'obteniendo'
+                      ? 'Ubicación: obteniendo en segundo plano…'
+                      : gpsIngresoEstado === 'ok'
+                        ? 'Ubicación obtenida ✓'
+                        : 'GPS no disponible — podés continuar. El ingreso se registrará sin ubicación.'}
+                  </div>
+                )}
                 <button
                   style={{ ...S.btn, ...S.btnPresente, marginBottom: 10 }}
                   onClick={() => {
