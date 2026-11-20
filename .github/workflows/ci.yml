@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20  # @types/node ^20; vitest 4 pide >= 20.19
+          node-version: 22  # supabase-js necesita WebSocket nativo (Node >= 22); vitest 4 pide >= 22.12
           cache: npm
 
       - name: Instalar dependencias
