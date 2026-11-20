@@ -49,6 +49,12 @@ import {
   supervisionProximaAVencer,
 } from '@/lib/supervisiones'
 import { cargarContextoExigibilidad } from '@/lib/supervision-universo'
+import {
+  armarAvisosSupervisionJefe,
+  escalamientoSupervisionJefeHabilitado,
+  jefesDeEscalamiento,
+  objetivosSinSupervision,
+} from '@/lib/control-preventivo'
 
 export const runtime = 'nodejs'
 
@@ -831,6 +837,62 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
     }
   }
 
+  // ── Escalamiento de supervisión vencida al JEFE DE SUPERVISORES ─────────────
+  // APAGADO salvo PUSH_ESCALAMIENTO_SUPERVISION_JEFE=1 (variable de servidor).
+  // Objetivos sin visita hace más de 2× su frecuencia (o nunca supervisados):
+  // un aviso por objetivo y período de vencimiento a los jefes activos de la
+  // lista de escalamiento. El aviso al supervisor de zona es el de arriba; este
+  // no lo reemplaza ni lo duplica. Sin jefes en la lista, no se envía a nadie
+  // (nada de caer a "todos"). Fail-closed: si no se puede leer la dedup o la
+  // lista, no sale ningún aviso de este bloque.
+  const escalamientoJefe = { habilitado: false, candidatos: 0, enviados: 0, yaAvisados: 0, sinJefe: 0, error: null as string | null }
+  if (escalamientoSupervisionJefeHabilitado()) {
+    escalamientoJefe.habilitado = true
+    try {
+      const items = objetivosSinSupervision({
+        objetivos: objetivosSupervision,
+        ultimaPorObjetivo: ultimaPorObjetivo,
+        contexto: contextoExigibilidad,
+      }).filter(it => it.nivel === 'jefe_supervisores')
+      escalamientoJefe.candidatos = items.length
+      if (items.length > 0) {
+        const lectura = await leerClavesEnLotes(
+          lote => admin.client.from('notificaciones_enviadas').select('tipo').in('tipo', lote),
+          items.map(it => it.claveDedup),
+        )
+        const listaRes = await admin.client
+          .from('escalamiento_destinatarios')
+          .select('usuario_id, rol_en_escalamiento, activo')
+        if (!lectura.ok || listaRes.error) {
+          escalamientoJefe.error = !lectura.ok ? lectura.error : (listaRes.error?.message || 'error de lectura')
+          console.error('[push] escalamiento supervisión→jefe: no se pudo leer dedup/lista; no se envía (fail-closed):', escalamientoJefe.error)
+        } else {
+          const plan = armarAvisosSupervisionJefe({
+            items,
+            jefes: jefesDeEscalamiento((listaRes.data || []) as Array<{ usuario_id: string; rol_en_escalamiento: string | null; activo: boolean | null }>),
+            yaEnviadas: lectura.claves,
+            zonaNombre: zonaId => zonasOperativas.find(z => z.id === zonaId)?.nombre || '',
+          })
+          escalamientoJefe.yaAvisados = plan.yaAvisados
+          escalamientoJefe.sinJefe = plan.sinJefe
+          for (const aviso of plan.avisos) {
+            const resultado = await sendToUsersObjetivo(admin.client, subscriptions, aviso.usuarios, aviso.objetivo_id, aviso.clave, {
+              title: aviso.titulo,
+              body: aviso.cuerpo,
+              url: '/dashboard',
+              tag: `objetivo-${aviso.objetivo_id}-supervision-jefe`,
+            })
+            sumarResultado(resultado)
+            escalamientoJefe.enviados += resultado.sent
+          }
+        }
+      }
+    } catch (e) {
+      escalamientoJefe.error = e instanceof Error ? e.message : String(e)
+      console.error('[push] escalamiento supervisión→jefe falló (no afecta al resto de la corrida):', escalamientoJefe.error)
+    }
+  }
+
   // ── Alertas de RONDAS (no iniciada / no finalizada) ──────────────────────────
   // Independiente de si hay turnos hoy: una alerta puede corresponder a un turno
   // de ayer. Detecta (idempotente) y rutea por zona reutilizando supervisor_zonas.
@@ -1114,7 +1176,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       candidatos30: 0,
       candidatos15: 0,
       alertasSupervisor: { tardanza: 0, sinFichaje: 0, fueraRadio: 0, puestoDescubierto: 0 },
-      alertasSupervision: { vencida: candidatosSupervisionVencida, proxima: candidatosSupervisionProxima, sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores },
+      alertasSupervision: { vencida: candidatosSupervisionVencida, proxima: candidatosSupervisionProxima, sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores, escalamientoJefe },
       alertasRonda: { noIniciada: candidatosRondaNoIniciada, noFinalizada: candidatosRondaNoFinalizada, suspendida: candidatosRondaSuspendida, pendientes: rondaAlertasPendientes, sinSupervisores: rondaAlertasSinSupervisores, yaAvisadas: rondaAlertasYaAvisadas, dedupError: rondaDedupError, omitidas: rondaOmitidas, resumenes: rondaResumenesEnviados, fallbackJefes: rondaFallbackJefes, seguimientosVencidos: rondaSeguimientosVencidos },
       recordatoriosVigilador: { aviso15m: avisos15m, pendiente: avisosPendiente, omitidosPorPausa: avisosOmitidosPorPausa, omitidosPorIntervencion: avisosOmitidosPorIntervencion },
     egresoPendiente: candidatosEgreso,
@@ -1341,6 +1403,7 @@ export async function enviarNotificaciones(client: any, opciones: OpcionesEnvio 
       vencida: candidatosSupervisionVencida,
       proxima: candidatosSupervisionProxima,
       sinZonaOSinSupervisores: objetivosSinZonaOSinSupervisores,
+      escalamientoJefe,
     },
     alertasRonda: {
       noIniciada: candidatosRondaNoIniciada,

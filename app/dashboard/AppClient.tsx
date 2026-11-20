@@ -114,6 +114,8 @@ import RondasPausadasPanel from '@/components/rondas/RondasPausadasPanel'
 import ControlPlanillasPanel from '@/components/planillas/ControlPlanillasPanel'
 import ControlImagenesIAPanel from '@/components/ia/ControlImagenesIAPanel'
 import ControlSupervisionesPanel from '@/components/supervisiones/ControlSupervisionesPanel'
+import ControlPreventivoPanel from '@/components/control-preventivo/ControlPreventivoPanel'
+import { controlPreventivoVisible } from '@/lib/control-preventivo'
 import SalidasAnticipadasPanel from '@/components/supervisiones/SalidasAnticipadasPanel'
 import EvaluacionSupervisoresPanel from '@/components/supervisiones/EvaluacionSupervisoresPanel'
 import { useAccesoLegajoSupervisores } from '@/components/supervisiones/useAccesoLegajoSupervisores'
@@ -1127,6 +1129,16 @@ function Dashboard({ guardias, objetivos, turnos, registros, novedades, onNaviga
           onVerTodas={() => onNavigate?.('supervisiones')}
         />
       </div>
+
+      {/* ── 6b. CONTROL PREVENTIVO (oculto salvo NEXT_PUBLIC_CONTROL_PREVENTIVO=1)
+          Sólo lectura: supervisiones vencidas con responsable y escalamiento,
+          puestos sin cubrir de las próximas 48 h y rondas incompletas con
+          clasificación sugerida. No envía nada. */}
+      {controlPreventivoVisible() && (
+        <div style={{ ...alertBox, marginTop:16 }}>
+          <ControlPreventivoPanel />
+        </div>
+      )}
 
       {/* ── 7. CONTROL DE IMÁGENES IA ───────────────────────────────────── */}
       <div style={{ ...alertBox, marginTop:16 }}>
