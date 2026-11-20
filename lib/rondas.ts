@@ -10,6 +10,15 @@ import {
   sha256Hex,
   type PasoRondaRed,
 } from '@/lib/red-resiliente'
+import { leerFotoPendiente } from '@/lib/pendientes-camara'
+import {
+  encolarEvidencia,
+  entradaEnCola,
+  procesarColaEvidencias,
+  quitarDeCola,
+  type EntradaColaEvidencia,
+  type ResultadoSincronizacion,
+} from '@/lib/rondas-cola-evidencias'
 import type { CausaPausa } from '@/lib/rondas-causas'
 import type { ModoQr } from '@/lib/rondas-qr'
 import type { MotivoIntervencion, ResultadoIntervencion } from '@/lib/alertas-ronda-intervencion'
@@ -1290,20 +1299,160 @@ export async function obtenerEjecucionActual(): Promise<ResultadoRondas<Respuest
   }
 }
 
+export const MENSAJE_FOTO_PENDIENTE_SINCRONIZAR =
+  'La foto quedó guardada en el teléfono, pendiente de sincronizar: se reintenta sola cuando vuelva la señal. El punto todavía NO quedó registrado.'
+
+/** Resultado de subir la foto. `pendienteSincronizar`: quedó en la cola local. */
+export type ResultadoSubidaFoto =
+  | { data: EvidenciaPuntoRonda; error: null; pendienteSincronizar?: false }
+  | { data: null; error: string; pendienteSincronizar?: boolean }
+
+interface RespuestaPostEvidencia {
+  ok: boolean
+  status: number
+  body: any
+  vencida: boolean
+  errorRed: string | null
+}
+
+async function tokenSesionRonda(): Promise<string | null> {
+  try {
+    const { data, error } = await supabase.auth.getSession()
+    if (error) return null
+    return data.session?.access_token ?? null
+  } catch {
+    return null
+  }
+}
+
+/** POST a /api/rondas/evidencia. Con `foto` null pide "sólo vincular". Nunca lanza. */
+async function postEvidenciaRonda(
+  token: string,
+  ejecucionPuntoId: string,
+  foto: File | null,
+  timeoutMs: number,
+): Promise<RespuestaPostEvidencia> {
+  const form = new FormData()
+  form.append('ejecucionPuntoId', ejecucionPuntoId)
+  if (foto) form.append('foto', foto, 'punto.jpg')
+  else form.append('soloVincular', '1')
+  const senal = senalConTimeout(timeoutMs)
+  try {
+    const response = await fetch('/api/rondas/evidencia', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+      signal: senal.signal,
+    })
+    const body = await response.json().catch(() => null)
+    return { ok: response.ok, status: response.status, body, vencida: false, errorRed: null }
+  } catch (e) {
+    return { ok: false, status: 0, body: null, vencida: senal.vencida(), errorRed: String((e as Error)?.message ?? e) }
+  } finally {
+    senal.liberar()
+  }
+}
+
+/** Red caída, timeout o servidor (no un rechazo de la foto ni del punto). */
+export function postEvidenciaTransitorio(status: number, codigo?: string | null): boolean {
+  if (codigo === 'registro_rechazado') return false
+  return status === 0 || status >= 500 || status === 408 || status === 429
+}
+
+function registrarFallaPost(paso: PasoRondaRed, r: RespuestaPostEvidencia, inicio: number, ejecucionPuntoId: string) {
+  if (!postEvidenciaTransitorio(r.status, r.body?.codigo)) return
+  registrarErrorRed(paso, {
+    err_code: r.status === 0 ? (r.vencida ? 'timeout' : 'red') : `http_${r.status}`,
+    err_message: r.status === 0 ? r.errorRed ?? undefined : r.body?.error,
+    duracion_ms: Date.now() - inicio, http_status: r.status, ejecucion_punto_id: ejecucionPuntoId,
+  })
+}
+
+/**
+ * Vincula la foto que YA está en Storage con su fila (sin re-subirla), con
+ * reintentos y backoff. `foto_no_encontrada`: no llegó; hay que subirla.
+ */
+export async function vincularEvidenciaPuntoRonda(
+  ejecucionPuntoId: string,
+  token: string,
+  intentos = REINTENTOS_IDEMPOTENTES,
+): Promise<ResultadoSincronizacion<EvidenciaPuntoRonda> & { fotoNoEncontrada?: boolean }> {
+  const inicio = Date.now()
+  const r = await reintentar(
+    () => postEvidenciaRonda(token, ejecucionPuntoId, null, TIMEOUT_RPC_MS),
+    {
+      intentos,
+      reintentarSi: x => !x.ok && postEvidenciaTransitorio(x.status, x.body?.codigo),
+      alReintentar: (_i, x) => registrarFallaPost('vincular_evidencia', x, inicio, ejecucionPuntoId),
+    },
+  )
+  if (r.ok && r.body?.evidencia) return { tipo: 'ok', evidencia: r.body.evidencia as EvidenciaPuntoRonda }
+  if (r.status === 404 && r.body?.codigo === 'foto_no_encontrada') {
+    return { tipo: 'transitorio', error: 'La foto no llegó al servidor.', fotoNoEncontrada: true }
+  }
+  registrarFallaPost('vincular_evidencia', r, inicio, ejecucionPuntoId)
+  if (postEvidenciaTransitorio(r.status, r.body?.codigo)) {
+    return { tipo: 'transitorio', error: r.body?.error || 'Sin conexión.' }
+  }
+  return { tipo: 'definitivo', error: r.body?.error || 'El servidor rechazó la foto.' }
+}
+
+/**
+ * Sincroniza UNA entrada de la cola (lib/rondas-cola-evidencias). Idempotente:
+ * 1) si la fila ya existe con la misma huella, listo;
+ * 2) si la foto ya está en Storage, sólo se vincula;
+ * 3) si no llegó, se sube la copia guardada en el teléfono (IndexedDB).
+ * Nunca registra el punto: eso lo decide `registrar_punto_ronda`.
+ */
+export async function sincronizarEvidenciaPendiente(
+  entrada: EntradaColaEvidencia,
+): Promise<ResultadoSincronizacion<EvidenciaPuntoRonda>> {
+  const id = entrada.ejecucion_punto_id
+  const token = await tokenSesionRonda()
+  if (!token) return { tipo: 'transitorio', error: 'Sesión no disponible.' }
+
+  if (entrada.sha256) {
+    const existente = await evidenciaExistentePorHuella(id, entrada.sha256)
+    if (existente) return { tipo: 'ok', evidencia: existente }
+  }
+
+  const vinculo = await vincularEvidenciaPuntoRonda(id, token, 1)
+  if (vinculo.tipo === 'ok' || vinculo.tipo === 'definitivo') return vinculo
+  if (!vinculo.fotoNoEncontrada) return vinculo
+
+  const foto = await leerFotoPendiente('ronda', id, 'punto', entrada.usuario_id)
+  if (!foto) return { tipo: 'definitivo', error: 'La foto ya no está guardada en el teléfono: hay que sacarla de nuevo.' }
+
+  const inicio = Date.now()
+  const r = await postEvidenciaRonda(token, id, foto, TIMEOUT_SUBIDA_MS)
+  if (r.ok && r.body?.evidencia) return { tipo: 'ok', evidencia: r.body.evidencia as EvidenciaPuntoRonda }
+  registrarFallaPost('subir_foto_punto', r, inicio, id)
+  if (postEvidenciaTransitorio(r.status, r.body?.codigo)) return { tipo: 'transitorio', error: r.body?.error || 'Sin conexión.' }
+  return { tipo: 'definitivo', error: r.body?.error || 'El servidor rechazó la foto.' }
+}
+
+/** Procesa la cola de fotos pendientes (al volver la red, al abrir la ronda). */
+export function sincronizarFotosPendientesRonda(opciones: { forzar?: boolean } = {}) {
+  return procesarColaEvidencias(sincronizarEvidenciaPendiente, opciones)
+}
+
 /**
  * Sube la foto obligatoria del punto por la ruta autenticada de servidor.
  *
  * El servidor deriva guardia, turno, ejecución y objetivo desde la sesión y
  * valida que el punto sea pendiente y pertenezca a la ejecución vigente.
+ *
+ * Si la foto llega pero su fila no se registra (o la red corta a mitad de
+ * camino), se reintenta la vinculación con backoff y, si sigue sin poder, el
+ * pedido queda en la cola local (`pendienteSincronizar`): la foto no se pierde
+ * y el punto NO se da por hecho.
  */
 export async function subirFotoPuntoRonda(
   ejecucionPuntoId: string,
   foto: File,
-): Promise<ResultadoRondas<EvidenciaPuntoRonda>> {
-  const { data: sesionData, error: sesionError } = await supabase.auth.getSession()
-  const token = sesionData.session?.access_token
-
-  if (sesionError || !token) {
+): Promise<ResultadoSubidaFoto> {
+  const token = await tokenSesionRonda()
+  if (!token) {
     return { data: null, error: 'Tu sesión venció. Volvé a ingresar.' }
   }
 
@@ -1313,55 +1462,64 @@ export async function subirFotoPuntoRonda(
   const huella = await sha256Hex(foto)
   if (huella) {
     const existente = await evidenciaExistentePorHuella(ejecucionPuntoId, huella)
-    if (existente) return { data: existente, error: null }
+    if (existente) {
+      quitarDeCola(ejecucionPuntoId)
+      return { data: existente, error: null }
+    }
   }
 
-  const form = new FormData()
-  form.append('ejecucionPuntoId', ejecucionPuntoId)
-  form.append('foto', foto, 'punto.jpg')
+  // Ya estaba en la cola con esta misma foto: probablemente ya está en Storage.
+  // Primero se intenta sólo vincular (barato); si no estaba, se sube.
+  const enCola = entradaEnCola(ejecucionPuntoId)
+  if (enCola && (enCola.sha256 ?? null) === (huella ?? null)) {
+    const vinculo = await vincularEvidenciaPuntoRonda(ejecucionPuntoId, token, 1)
+    if (vinculo.tipo === 'ok') {
+      quitarDeCola(ejecucionPuntoId)
+      return { data: vinculo.evidencia, error: null }
+    }
+  }
 
-  // La subida NO se reintenta sola: el body es grande y el reintento lo decide
-  // la persona (con el chequeo de huella de arriba, que evita mandarla dos veces).
+  const pendiente = (error: string): ResultadoSubidaFoto => {
+    encolarEvidencia({ ejecucionPuntoId, sha256: huella, error })
+    return { data: null, error, pendienteSincronizar: true }
+  }
+
+  // La subida completa NO se reintenta sola en línea: el body es grande. Si no
+  // llega, la cola la reintenta después (con el chequeo de huella / vínculo).
   const inicio = Date.now()
-  const senal = senalConTimeout(TIMEOUT_SUBIDA_MS)
-  try {
-    const response = await fetch('/api/rondas/evidencia', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: form,
-      signal: senal.signal,
-    })
-    const body = await response.json().catch(() => null)
+  const r = await postEvidenciaRonda(token, ejecucionPuntoId, foto, TIMEOUT_SUBIDA_MS)
 
-    if (!response.ok) {
-      // 5xx/408/429: red o servidor, no la foto. Se registra para el diagnóstico.
-      if (response.status >= 500 || response.status === 408 || response.status === 429) {
-        registrarErrorRed('subir_foto_punto', {
-          err_code: `http_${response.status}`, err_message: body?.error,
-          duracion_ms: Date.now() - inicio, http_status: response.status, ejecucion_punto_id: ejecucionPuntoId,
-        })
-      }
-      return {
-        data: null,
-        error: body?.error || 'No se pudo subir la foto del punto.',
-      }
-    }
+  if (r.ok && r.body?.evidencia) {
+    quitarDeCola(ejecucionPuntoId)
+    return { data: r.body.evidencia as EvidenciaPuntoRonda, error: null }
+  }
 
-    return { data: body?.evidencia as EvidenciaPuntoRonda, error: null }
-  } catch (e) {
-    registrarErrorRed('subir_foto_punto', {
-      err_code: senal.vencida() ? 'timeout' : 'red',
-      err_message: (e as Error)?.message,
-      duracion_ms: Date.now() - inicio, http_status: 0, ejecucion_punto_id: ejecucionPuntoId,
-    })
-    return {
-      data: null,
-      error: senal.vencida()
-        ? 'La subida de la foto tardó demasiado (señal débil). Intentá de nuevo: si ya había llegado, no se vuelve a subir.'
-        : 'No hay conexión para subir la foto.',
+  // 5xx/408/429/red: no es la foto. Se registra para el diagnóstico.
+  registrarFallaPost('subir_foto_punto', r, inicio, ejecucionPuntoId)
+
+  if (r.body?.codigo === 'registro_pendiente') {
+    // La foto YA está en Storage: reintentar sólo la fila, con backoff.
+    const vinculo = await vincularEvidenciaPuntoRonda(ejecucionPuntoId, token)
+    if (vinculo.tipo === 'ok') {
+      quitarDeCola(ejecucionPuntoId)
+      return { data: vinculo.evidencia, error: null }
     }
-  } finally {
-    senal.liberar()
+    return pendiente(MENSAJE_FOTO_PENDIENTE_SINCRONIZAR)
+  }
+
+  if (r.status === 0) {
+    return pendiente(r.vencida
+      ? 'La subida de la foto tardó demasiado (señal débil). La foto quedó guardada en el teléfono y se reintenta sola: si ya había llegado, no se vuelve a subir.'
+      : 'No hay conexión para subir la foto. La foto quedó guardada en el teléfono y se reintenta sola cuando vuelva la señal.')
+  }
+
+  if (postEvidenciaTransitorio(r.status, r.body?.codigo)) {
+    return pendiente(MENSAJE_FOTO_PENDIENTE_SINCRONIZAR)
+  }
+
+  return {
+    data: null,
+    error: r.body?.error || 'No se pudo subir la foto del punto.',
   }
 }
 
