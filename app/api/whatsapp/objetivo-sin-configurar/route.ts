@@ -24,7 +24,8 @@ const ENVIO_HABILITADO = true as const
 const ETAPA = 'wa_objetivo_sin_configurar'
 const PLANTILLA = process.env.WHATSAPP_PLANTILLA_OBJETIVO_SIN_CONFIGURAR || PLANTILLA_OBJETIVO_SIN_CONFIGURAR.nombre
 /** Desde cuándo rige el aviso: sólo objetivos creados después. Sin valor = no avisa. */
-const CORTE = process.env.WHATSAPP_OBJETIVO_SIN_CONFIG_DESDE || null
+// Activado el 19/11/2026 a la noche: sólo avisan los objetivos creados desde entonces.
+const CORTE = process.env.WHATSAPP_OBJETIVO_SIN_CONFIG_DESDE || '2026-11-19T23:00:00-03:00'
 
 interface Persona { id: string; nombre: string | null; apellido: string | null; telefono: string | null }
 

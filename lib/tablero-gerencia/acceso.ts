@@ -23,9 +23,10 @@ export function tableroGerenciaVisible(valor: string | undefined = process.env.N
 
 export const ENVIO_MENSAJES_GESTION_HABILITADO = false as const
 
-/** Configuración guiada de objetivos (protocolo + ronda de 2 puntos): oculta salvo NEXT_PUBLIC_CONFIGURACION_GUIADA === '1'. */
+/** Configuración guiada de objetivos (protocolo + ronda de 2 puntos): encendida desde el 19/11/2026.
+ *  Para apagarla sin tocar código: NEXT_PUBLIC_CONFIGURACION_GUIADA=0 en Vercel. */
 export function configuracionGuiadaVisible(valor: string | undefined = process.env.NEXT_PUBLIC_CONFIGURACION_GUIADA): boolean {
-  return valor === '1'
+  return valor !== '0'
 }
 
 /** Tablero de Administración: oculto salvo NEXT_PUBLIC_GESTION_ADMINISTRACION === '1'. */
