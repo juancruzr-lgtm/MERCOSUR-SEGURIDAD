@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSupabaseAdmin, normalizeEmail, requireCapacidad } from '../_lib/employee-auth'
+import { tieneCapacidad } from '@/lib/capacidades'
+import { getSupabaseAdmin, normalizeEmail, resolverPerfil } from '../_lib/employee-auth'
+import { verificarDestino } from '../_lib/destino-usuario'
 
 export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin()
   if (admin.error) return NextResponse.json({ error: admin.error }, { status: 500 })
 
-  const adminError = await requireCapacidad(req, admin.client, 'gestionar_personal', 'Sesion de administrador requerida')
-  if (adminError) return adminError
+  const acceso = await resolverPerfil(req, admin.client)
+  if ('respuesta' in acceso) return acceso.respuesta
+  if (!tieneCapacidad(acceso.perfil, 'gestionar_personal')) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
+  }
 
   try {
     const body = await req.json()
@@ -15,6 +20,9 @@ export async function POST(req: NextRequest) {
 
     if (!usuarioId) return NextResponse.json({ error: 'usuario_id es obligatorio' }, { status: 400 })
     if (!email) return NextResponse.json({ error: 'email es obligatorio' }, { status: 400 })
+
+    const bloqueo = await verificarDestino(admin.client, acceso.perfil, usuarioId)
+    if (bloqueo) return bloqueo
 
     const { data: usuario, error: usuarioError } = await admin.client
       .from('usuarios')
