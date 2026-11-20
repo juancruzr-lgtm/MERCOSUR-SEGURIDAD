@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react'
 import { leer, rpc } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
+import { TOPE_RETENCIONES } from '@/lib/facturacion/estado-cobro'
 import { Etiqueta, S, centavosDe, fecha, pesos, useAccion } from './comun'
 
 const ESTADO_MORA: Record<string, [string, string]> = {
@@ -25,7 +26,11 @@ export default function Vencimientos() {
   const { ocupado, correr, Mensaje } = useAccion()
   const cargar = async () => setFilas(await rpc('fact_vencimientos', { p_hoy: hoy, p_cliente_id: null, p_objetivo_id: null }))
   useEffect(() => { correr(cargar) }, [hoy]) // eslint-disable-line react-hooks/exhaustive-deps
-  const visibles = filas.filter(f => !filtro || f.estado_mora === filtro)
+  const [verRetenciones, setVerRetenciones] = useState(false)
+  // Cobrada con un resto ≤ 25 % del total: es retención (misma regla que Cobranzas), no deuda ni mora.
+  const esResto = (f: any) => Number(f.saldo_c) > 0 && Number(f.saldo_c) < Number(f.total_c) && Number(f.saldo_c) <= Number(f.total_c) * TOPE_RETENCIONES
+  const restos = filas.filter(esResto)
+  const visibles = filas.filter(f => (verRetenciones || !esResto(f)) && (!filtro || f.estado_mora === filtro))
   const actual = filas.find(f => f.comprobante_id === sel)
 
   return (
@@ -35,7 +40,8 @@ export default function Vencimientos() {
         <select style={S.input} value={filtro} onChange={e => setFiltro(e.target.value)}>
           <option value="">Todas</option>{Object.entries(ESTADO_MORA).map(([k, [t]]) => <option key={k} value={k}>{t}</option>)}
         </select>
-        <span style={S.sub}>Saldos según cobros y retenciones cargados: pendientes de conciliación hasta incorporar los extractos.</span>
+        <label style={S.sub}><input type="checkbox" checked={verRetenciones} onChange={e => setVerRetenciones(e.target.checked)} /> Mostrar cobradas con resto de retenciones ({restos.length} · {pesos(restos.reduce((a, f) => a + Number(f.saldo_c), 0))})</label>
+        <span style={S.sub}>Las facturas cobradas cuyo resto no supera el 25 % del total son retenciones: no se listan como deuda ni mora.</span>
         <Mensaje />
       </div>
       <div style={{ ...S.card, overflowX: 'auto' }}>
