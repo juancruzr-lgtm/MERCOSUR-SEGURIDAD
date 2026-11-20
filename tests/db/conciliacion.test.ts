@@ -362,3 +362,89 @@ describe('Otros controles', () => {
     })
   })
 })
+
+// ── Relevo desde Reportes = «Cerrar turno» (mismo componente y misma función) ──
+// El modal precarga un tramo por cada registro con entrada (vigilador efectivo,
+// horario final o real) y el usuario agrega el del relevo. Se reproduce acá esa
+// construcción y se llama a cerrar_turno, igual que desde Revisión Operativa.
+async function tramosComoElModal(turnoId: string) {
+  return (await registros(turnoId)).filter((r: any) => r.hora_entrada_real).map((r: any) => ({
+    guardia_id: r.guardia_final_id ?? r.guardia_id,
+    hora_inicio: s(r.hora_entrada_final ?? r.hora_entrada_real),
+    hora_fin: s(r.hora_salida_final ?? r.hora_salida_real),
+  }))
+}
+async function relevoDesdeReportes(p: any, turnoId: string, tramoNuevo: object) {
+  const tramos = await tramosComoElModal(turnoId)
+  return como(p, `select cerrar_turno($1, $2::jsonb, 'Relevo cargado desde Reportes')`, [turnoId, JSON.stringify([...tramos, tramoNuevo])])
+}
+
+describe('Relevo desde Reportes (cerrar_turno, procedimiento vigente)', () => {
+  it('normal: se retiró a las 14 y lo relevaron hasta las 20 → 6 + 6; turno completo para el cliente', async () => {
+    await e.enTransaccion(async () => {
+      const t = await turno('2026-11-10', '08:00', '20:00')
+      const { rows: [r] } = await ingresoVigilador(t, '08:00')
+      await egresoVigilador(r.id, '14:00', 6)
+      await relevoDesdeReportes(P.supervisor, t, { guardia_id: P.vigiladorSur.id, hora_inicio: '14:00', hora_fin: '20:00' })
+      expect(await horasLiquidacion(t)).toEqual({ [P.vigilador.id]: 6, [P.vigiladorSur.id]: 6 })
+      expect(await horasFacturacion([t])).toEqual({ cubiertos: 12, descubiertos: 0 })
+      const [orig] = (await registros(t)).filter((x: any) => x.id === r.id)
+      expect([s(orig.hora_entrada_real), s(orig.hora_salida_real)]).toEqual(['08:00', '14:00'])
+      expect((await auditoria(t)).map((a: any) => a.campo)).toEqual(expect.arrayContaining(['cerrar_turno', 'cerrar_turno_nuevo']))
+    })
+  })
+  it('superpuesto: el relevo llegó 13:50 → lo resuelve cerrar_turno como siempre (6 y 6,17 → 6 al liquidar)', async () => {
+    await e.enTransaccion(async () => {
+      const t = await turno('2026-11-10', '08:00', '20:00')
+      const { rows: [r] } = await ingresoVigilador(t, '08:00')
+      await egresoVigilador(r.id, '14:00', 6)
+      await relevoDesdeReportes(P.supervisor, t, { guardia_id: P.vigiladorSur.id, hora_inicio: '13:50', hora_fin: '20:00' })
+      const h = (await registros(t)).map((x: any) => Number(x.horas_liquidables)).sort()
+      expect(h).toEqual([6, 6.17])
+      expect(await horasLiquidacion(t)).toEqual({ [P.vigilador.id]: 6, [P.vigiladorSur.id]: 6 })
+    })
+  })
+  it('nocturno 20→08: se retiró a las 02 y lo relevaron hasta las 08 → 6 + 6', async () => {
+    await e.enTransaccion(async () => {
+      const t = await turno('2026-11-10', '20:00', '08:00')
+      const { rows: [r] } = await ingresoVigilador(t, '20:00')
+      await egresoVigilador(r.id, '02:00', 6)
+      await relevoDesdeReportes(P.supervisor, t, { guardia_id: P.vigiladorSur.id, hora_inicio: '02:00', hora_fin: '08:00' })
+      expect(await horasLiquidacion(t)).toEqual({ [P.vigilador.id]: 6, [P.vigiladorSur.id]: 6 })
+      expect(await horasFacturacion([t])).toEqual({ cubiertos: 12, descubiertos: 0 })
+    })
+  })
+  it('mismo resultado que desde Revisión Operativa (misma llamada, mismos tramos)', async () => {
+    const correr = async (comentario: string) => {
+      let out: any
+      await e.enTransaccion(async () => {
+        const t = await turno('2026-11-10', '08:00', '20:00')
+        const { rows: [r] } = await ingresoVigilador(t, '08:00')
+        await egresoVigilador(r.id, '14:00', 6)
+        const tramos = [...await tramosComoElModal(t), { guardia_id: P.vigiladorSur.id, hora_inicio: '14:00', hora_fin: '20:00' }]
+        await como(P.supervisor, `select cerrar_turno($1, $2::jsonb, $3)`, [t, JSON.stringify(tramos), comentario])
+        out = { liq: await horasLiquidacion(t), fact: await horasFacturacion([t]),
+          regs: (await registros(t)).map((x: any) => [x.guardia_id, s(x.hora_entrada_final), s(x.hora_salida_final), Number(x.horas_liquidables), x.origen_cobertura]).sort() }
+      })
+      return out
+    }
+    expect(await correr('Reportes')).toEqual(await correr('Revisión Operativa'))
+  })
+  it('permisos: el vigilador no puede; Administración sí', async () => {
+    await e.enTransaccion(async () => {
+      const t = await turno('2026-11-10', '08:00', '20:00')
+      const tramo = { guardia_id: P.vigiladorSur.id, hora_inicio: '14:00', hora_fin: '20:00' }
+      expect((await e.comoUsuario(P.vigilador, () => e.intentar(() => relevoDesdeReportes(P.vigilador, t, tramo))))?.message).toMatch(/No autorizado/)
+      expect(await e.comoUsuario(P.administracion, () => e.intentar(() => relevoDesdeReportes(P.administracion, t, tramo)))).toBeNull()
+    })
+  })
+  it('turno ya revisado: el supervisor no lo vuelve a cerrar, Administración sí (regla vigente)', async () => {
+    await e.enTransaccion(async () => {
+      const t = await turno('2026-11-10', '08:00', '20:00')
+      const tramo = { guardia_id: P.vigilador.id, hora_inicio: '08:00', hora_fin: '20:00' }
+      await relevoDesdeReportes(P.supervisor, t, tramo)
+      expect((await e.comoUsuario(P.supervisor, () => e.intentar(() => relevoDesdeReportes(P.supervisor, t, tramo))))?.message).toMatch(/ya fue revisado/)
+      expect(await e.comoUsuario(P.administracion, () => e.intentar(() => relevoDesdeReportes(P.administracion, t, tramo)))).toBeNull()
+    })
+  })
+})

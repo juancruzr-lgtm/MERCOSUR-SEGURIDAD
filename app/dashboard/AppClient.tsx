@@ -5552,7 +5552,7 @@ const MOTIVOS_CARGA_MANUAL = [
   'Otro',
 ]
 
-function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegistros, setTurnos }: any) {
+function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegistros, setTurnos, onRelevo }: any) {
   const [form, setForm] = useState({
     guardia_id: turno?.guardia_id || '',
     hora_entrada: '',
@@ -5656,6 +5656,15 @@ function CargarAsistenciaManualModal({ turno, onClose, guardias, user, setRegist
         </div>
 
         {error && <div style={{ color:'#ef4444', fontSize:13 }}>{error}</div>}
+        {/* El turno ya tiene registro: la carga manual no aplica (la base la rechaza).
+            El relevo se registra con «Cerrar turno» por tramos, el mismo procedimiento
+            de Revisión Operativa, sin cambios. */}
+        {error && onRelevo && /ya tiene cobertura registrada/i.test(error) && (
+          <div style={{ background:'#1e2d42', border:'1px solid #3b82f644', borderRadius:8, padding:'10px 14px', fontSize:12, color:'#93c5fd', display:'flex', justifyContent:'space-between', alignItems:'center', gap:10 }}>
+            <span>Este turno ya tiene asistencia registrada. Para un relevo, cargá los tramos de cada vigilador.</span>
+            <button style={{ ...S.btn, ...S.btnPrimary, padding:'6px 10px', fontSize:12 }} onClick={() => onRelevo(turno)}>Cargar relevo</button>
+          </div>
+        )}
 
         <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
           <button style={{ ...S.btn, ...S.btnSecondary }} onClick={onClose} disabled={loading}>Cancelar</button>
@@ -7245,6 +7254,8 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
   const [cargaManualAnulando, setCargaManualAnulando] = useState<RegistroAsistencia | null>(null)
   const [cargaManualEditando, setCargaManualEditando] = useState<RegistroAsistencia | null>(null)
   const [turnoParaCargaManual, setTurnoParaCargaManual] = useState<Turno | null>(null)
+  // Relevo / tramos de un turno que ya tiene asistencia: abre CerrarTurnoModal (sin cambios).
+  const [turnoParaRelevo, setTurnoParaRelevo] = useState<Turno | null>(null)
   const [agregarRegistroContexto, setAgregarRegistroContexto] = useState<{ empleadoId?: string; objetivoId?: string } | null>(null)
   const empleados = guardias.filter((g: Usuario) => g.rol !== 'admin')
   const [tab, setTab] = useState('planilla_empleado')
@@ -8801,6 +8812,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         >
                           Corregir
                         </button>
+                        {row._turno_id && admiteAccionesDePlanilla(row.Estado) && (
+                          <button
+                            style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12 }}
+                            title="Relevo o tramos: el mismo «Cerrar turno» de Revisión Operativa"
+                            onClick={() => setTurnoParaRelevo(turnosMes.find((t: Turno) => t.id === row._turno_id) || null)}
+                          >
+                            Relevo
+                          </button>
+                        )}
                         {row._registro.tipo_registro === 'carga_manual' && !row._registro.registro_anulado_at && (
                           <button
                             style={{ ...S.btn, padding:'6px 10px', fontSize:12, background:'#1e40af', color:'#93c5fd', border:'1px solid #1d4ed8' }}
@@ -8945,6 +8965,15 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
                         onClick={() => setRegistroCorrigiendo(row._registro)}
                       >
                         Corregir
+                      </button>
+                    )}
+                    {row._registro && row._turno_id && admiteAccionesDePlanilla(row.Estado) && (
+                      <button
+                        style={{ ...S.btn, ...S.btnSecondary, padding:'6px 10px', fontSize:12, marginLeft:4 }}
+                        title="Relevo o tramos: el mismo «Cerrar turno» de Revisión Operativa"
+                        onClick={() => setTurnoParaRelevo(turnosMes.find((t: Turno) => t.id === row._turno_id) || null)}
+                      >
+                        Relevo
                       </button>
                     )}
                     {!row._registro && row._sinFichar && (
@@ -9287,6 +9316,24 @@ function Reportes({ registros, setRegistros, turnos, setTurnos, guardias, objeti
           user={user}
           setRegistros={setRegistrosReportes}
           setTurnos={setTurnosReportes}
+          onRelevo={(t: Turno) => { setTurnoParaCargaManual(null); setTurnoParaRelevo(t) }}
+        />
+      )}
+
+      {turnoParaRelevo && (
+        <CerrarTurnoModal
+          turno={turnoParaRelevo}
+          registros={registrosReportes}
+          guardias={guardias}
+          objetivos={objetivos}
+          onClose={() => setTurnoParaRelevo(null)}
+          onSuccess={async (turnoId) => {
+            // Se releen los registros del turno: cerrar_turno puede crear, actualizar o dejar en 0 registros.
+            const { data } = await supabase.from('registros_asistencia').select('*').eq('turno_id', turnoId)
+            if (data) setRegistrosReportes((prev: RegistroAsistencia[]) => [...prev.filter(r => r.turno_id !== turnoId), ...(data as RegistroAsistencia[])])
+            setTurnosReportes((prev: Turno[]) => prev.map((t: Turno) => t.id === turnoId ? { ...t, revisado_at: new Date().toISOString(), estado: 'cubierto' as const } : t))
+            setTurnoParaRelevo(null)
+          }}
         />
       )}
 
