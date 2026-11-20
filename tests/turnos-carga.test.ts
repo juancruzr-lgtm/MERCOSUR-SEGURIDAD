@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { cargarTurnosVentana, ventanaTurnosPantalla } from '@/lib/turnos-carga'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { COLUMNAS_TURNO_PANTALLA, SELECT_TURNO_PANTALLA, cargarTurnosVentana, ventanaTurnosPantalla } from '@/lib/turnos-carga'
 import { fetchEnLotesResult } from '@/lib/fetch-paginado'
 
 // F-03 (auditoría funcional 19/11/2026): Admin → Turnos → «Mes actual»
@@ -132,5 +134,50 @@ describe('fetchEnLotesResult — .in() con listas largas', () => {
     const r = await fetchEnLotesResult([1, 2, 3], (lote) =>
       Promise.resolve(lote[0] === 3 ? { data: null, error: { message: 'x' } } : { data: [lote[0]], error: null }), 2)
     expect(r).toEqual({ data: [], error: { message: 'x' } })
+  })
+})
+
+describe('SELECT_TURNO_PANTALLA — columnas livianas del estado global de turnos', () => {
+  // Esquema vivo exportado para PGlite (tests/db/schema): fuente de verdad de
+  // las columnas reales de public.turnos.
+  function columnasTablaTurnos(): string[] {
+    const sql = readFileSync(join(process.cwd(), 'tests/db/schema/10-tablas.sql'), 'utf8')
+    const ini = sql.indexOf('create table public.turnos (')
+    const fin = sql.indexOf('\n);', ini)
+    return sql.slice(ini, fin).split('\n').slice(1)
+      .map(l => l.trim().split(/\s+/)[0]).filter(Boolean)
+  }
+
+  it('todas las columnas pedidas existen en public.turnos', () => {
+    const reales = new Set(columnasTablaTurnos())
+    expect(reales.size).toBeGreaterThan(20)
+    for (const c of COLUMNAS_TURNO_PANTALLA) expect(reales.has(c), c).toBe(true)
+  })
+
+  it('no pide los textos libres ni la auditoría que ninguna pantalla lee', () => {
+    const pedidas = new Set<string>(COLUMNAS_TURNO_PANTALLA)
+    for (const c of ['observacion', 'observacion_guardia', 'observacion_supervisor', 'motivo_reemplazo', 'origen', 'estado_revision', 'editado_por', 'updated_at']) {
+      expect(pedidas.has(c), c).toBe(false)
+    }
+    expect(SELECT_TURNO_PANTALLA).not.toContain('*')
+  })
+
+  it('incluye lo que leen cobertura, programación, publicación y cierre', () => {
+    for (const c of ['id', 'guardia_id', 'guardia_original_id', 'guardia_real_id', 'objetivo_id', 'puesto_id',
+      'fecha', 'hora_inicio', 'hora_fin', 'estado', 'tipo_evento', 'created_at', 'reemplaza_turno_id',
+      'servicio_base_id', 'publicado', 'revisado_at']) {
+      expect(COLUMNAS_TURNO_PANTALLA as readonly string[]).toContain(c)
+    }
+  })
+
+  it('cargarTurnosVentana pide esas columnas, no select(*)', async () => {
+    const vistos: string[] = []
+    const cliente = { from: () => {
+      const b: any = { select: (s: string) => { vistos.push(s); return b }, gte: () => b, lt: () => b, order: () => b,
+        range: () => Promise.resolve({ data: [], error: null }) }
+      return b
+    } }
+    await cargarTurnosVentana(cliente, '2026-10-31', '2026-12-01')
+    expect(vistos).toEqual([SELECT_TURNO_PANTALLA])
   })
 })

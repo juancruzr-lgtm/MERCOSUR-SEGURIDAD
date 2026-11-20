@@ -189,3 +189,35 @@ describe('fases operativas de un objetivo', () => {
     expect(estadoSupervisionObjetivo({ id: 'o1' }, null, AHORA_D.getTime())).toBe('nunca')
   })
 })
+
+// El corte de "en operación" es del calendario ARGENTINO, no del huso del
+// proceso. Antes salía de setDate/getDate locales: en un proceso en UTC
+// (CI, Vercel), a las 21:00 ART ya es el día siguiente y el borde de 7 días se
+// corría uno. Se fuerza el huso del proceso para que la prueba no dependa de
+// la máquina que la corre.
+describe('objetivoEnOperacion / faseOperativa no dependen del huso del proceso', () => {
+  const husos = ['UTC', 'America/Argentina/Buenos_Aires', 'Asia/Tokyo', 'America/Los_Angeles']
+  const original = process.env.TZ
+
+  for (const tz of husos) {
+    it(`borde de 7 días con el proceso en ${tz}`, () => {
+      process.env.TZ = tz
+      try {
+        // 31/08 21:00 ART = 01/09 00:00 UTC.
+        const noche = new Date('2026-08-31T21:00:00-03:00')
+        expect(objetivoEnOperacion(['2026-08-24'], noche)).toBe(true)
+        expect(objetivoEnOperacion(['2026-08-23'], noche)).toBe(false)
+        // 01/09 01:00 ART: ya es otro día argentino, el borde corre.
+        const madrugada = new Date('2026-09-01T01:00:00-03:00')
+        expect(objetivoEnOperacion(['2026-08-25'], madrugada)).toBe(true)
+        expect(objetivoEnOperacion(['2026-08-24'], madrugada)).toBe(false)
+        // "Hoy" argentino para separar futuros de recientes.
+        expect(faseOperativa(['2026-09-01'], false, noche)).toBe('proximo')
+        expect(faseOperativa(['2026-08-31'], false, noche)).toBe('operando')
+      } finally {
+        if (original === undefined) delete process.env.TZ
+        else process.env.TZ = original
+      }
+    })
+  }
+})
