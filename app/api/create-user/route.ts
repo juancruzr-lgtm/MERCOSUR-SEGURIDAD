@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { repairEmployeeAuthUser } from '../_lib/auth-repair'
-import { getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
+import { getBearerToken, getSupabaseAdmin, resolverPerfil } from '../_lib/employee-auth'
+import { recortarParaLaSesion } from '../_lib/datos-personales-respuesta'
 import { tieneCapacidad, alcanceDe } from '@/lib/capacidades'
 import { marcarCambioObligatorio } from '../_lib/acceso-password'
 import { verificarDestino } from '../_lib/destino-usuario'
@@ -87,7 +88,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       action: resultado.action,
-      user: resultado.user,
+      user: (await recortarParaLaSesion(getBearerToken(req), [resultado.user]))[0], // DNI/teléfono/CUIL: sólo lo que la sesión puede ver según la base (F-06).
       message: message + (avisoCambio ?? ''),
     })
   } catch (error) {

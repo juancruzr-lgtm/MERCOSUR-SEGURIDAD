@@ -5,6 +5,7 @@
  * pero cada una primero pide la autorización a la base con la sesión del usuario).
  */
 import { supabase, headersSesion } from '@/lib/supabase'
+import { cargarDatosPersonales } from '@/lib/usuarios-columnas'
 import type { ApiPostulantes, ArchivoPostulacion, Duplicado, Postulacion, ResultadoAlta, ResultadoCompletarLegajo } from '@/lib/postulantes'
 import type { LecturaPropuesta } from '@/components/postulantes/FichaPostulante'
 
@@ -96,8 +97,10 @@ export const apiPostulantesSupabase: ApiPostulantes = {
     const { data } = await supabase.auth.getUser()
     const u = data.user
     if (!u) return { email: null, telefono: null }
-    const { data: fila } = await supabase.from('usuarios').select('email, telefono').eq('auth_user_id', u.id).maybeSingle()
-    return { email: (fila?.email ?? u.email ?? null)?.toLowerCase() ?? null, telefono: fila?.telefono ?? null }
+    // El teléfono propio sale de usuarios_datos_personales (F-06), no de la tabla.
+    const { data: fila } = await supabase.from('usuarios').select('id, email').eq('auth_user_id', u.id).maybeSingle()
+    const propios = fila?.id ? (await cargarDatosPersonales(supabase, [fila.id])).porId.get(fila.id) : undefined
+    return { email: (fila?.email ?? u.email ?? null)?.toLowerCase() ?? null, telefono: propios?.telefono ?? null }
   },
   async permisos() {
     const [g, c] = await Promise.all([supabase.rpc('postulacion_gestiona'), supabase.rpc('postulacion_carga_habilitada')])

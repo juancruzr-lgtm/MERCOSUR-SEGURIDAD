@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ensureEmployeeAuth, getBearerToken, getSupabaseAdmin, nombreEmpleado, requireCapacidad, type UsuarioEmpleado } from '../_lib/employee-auth'
+import { recortarParaLaSesion } from '../_lib/datos-personales-respuesta'
 import { marcarCambioObligatorio } from '../_lib/acceso-password'
 import { filtrarOperables, perfilPorAuth } from '../_lib/destino-usuario'
 
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest) {
     summary,
     omitidos,
     errores,
-    users: users || [],
+    users: await recortarParaLaSesion(getBearerToken(req), users || []), // DNI/teléfono/CUIL: sólo lo que la sesión puede ver según la base (F-06).
     message: `Accesos sincronizados: ${summary.creados} creados, ${summary.actualizados} actualizados, ${summary.vinculados} vinculados, ${summary.omitidos} omitidos, ${summary.errores} errores.`,
   })
 }

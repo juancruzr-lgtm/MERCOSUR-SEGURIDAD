@@ -49,7 +49,7 @@ import type { AccionIntervencionOperativa, TipoAlertaOperativa as TipoAlertaOper
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
 import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
 import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
-import { COLUMNAS_USUARIO } from '@/lib/usuarios-columnas'
+import { COLUMNAS_USUARIO, cargarDatosPersonales, conDatosPersonales } from '@/lib/usuarios-columnas'
 import { cambiosDeFormulario, fusionarFila } from '@/lib/usuarios-edicion'
 import PostulantesPanel from '@/components/postulantes/PostulantesPanel'
 import { apiPostulantesSupabase, leerSolicitudIA, lecturaIaVisible } from '@/lib/postulantes-supabase'
@@ -667,7 +667,8 @@ export default function SupervisorMobile({ user }: any) {
         .order('nombre'),
       supabase
         .from('usuarios')
-        .select('id, nombre, apellido, legajo, rol, estado, email, telefono, foto_url, auth_user_id')
+        // Sin telefono: llega por usuarios_datos_personales (F-06), abajo.
+        .select('id, nombre, apellido, legajo, rol, estado, email, foto_url, auth_user_id')
         .in('rol', ['guardia', 'vigilador'])
         .order('apellido'),
       supabase
@@ -826,7 +827,12 @@ export default function SupervisorMobile({ user }: any) {
     setZonasOperativas(zonasError ? [] : (zonasResult.data || []) as ZonaOperativa[])
     setSupervisorZonas(supervisorZonasError ? [] : (supervisorZonasResult.data || []) as SupervisorZona[])
     setUltimaSupervisionPorObjetivo(ultimaPorObjetivo)
-    setGuardias((guardiasData || []) as Usuario[])
+    // Teléfono (y DNI) de los vigiladores por RPC con permiso (F-06): la base entrega
+    // los de las personas con turno en las zonas del supervisor. Si falla, la lista
+    // se muestra igual, sin teléfono.
+    const personales = await cargarDatosPersonales(supabase, ((guardiasData || []) as Usuario[]).map(g => g.id))
+    if (personales.error) console.error('Datos personales:', personales.error)
+    setGuardias(conDatosPersonales((guardiasData || []) as Usuario[], personales.porId))
     setSupervisores((supervisoresData || []) as Usuario[])
     setSupervisoresGuardia(supervisoresGuardiaError ? [] : (supervisoresGuardiaData || []) as SupervisorGuardia[])
     setSolicitudesAdmin(solicitudesError ? [] : (solicitudesData || []) as SolicitudAdmin[])
@@ -1845,13 +1851,15 @@ export default function SupervisorMobile({ user }: any) {
       .update(payload)
       .eq('id', guardiaEditando.id)
       .in('rol', ['guardia', 'vigilador'])
-      .select('id, nombre, apellido, legajo, rol, estado, email, telefono, foto_url')
+      // Sin telefono en la respuesta (F-06): si se cambió, se refleja desde lo enviado.
+      .select('id, nombre, apellido, legajo, rol, estado, email, foto_url')
       .single()
 
     if (updateError) {
       setError(updateError.message)
     } else if (data) {
-      setGuardias(prev => prev.map(g => g.id === guardiaEditando.id ? fusionarFila(g as any, data as any) as Usuario : g))
+      const enviado = 'telefono' in payload ? { telefono: (payload as any).telefono ?? null } : {}
+      setGuardias(prev => prev.map(g => g.id === guardiaEditando.id ? fusionarFila(g as any, { ...(data as any), ...enviado }) as Usuario : g))
       setGuardiaEditando(null)
     }
 

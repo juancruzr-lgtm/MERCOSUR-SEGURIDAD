@@ -18,7 +18,7 @@
 
 import { fetchPaginadoResult } from '@/lib/fetch-paginado'
 import { esCuentaGalicia } from '@/lib/cuenta-banco'
-import { cargarCuentasBancarias } from '@/lib/usuarios-columnas'
+import { cargarCuentasBancarias, cargarDatosPersonales, conDatosPersonales, type DatosPersonalesUsuario } from '@/lib/usuarios-columnas'
 import {
   construirResumenGuardia,
   plantillaLiquidacionResumenGuardia,
@@ -496,8 +496,9 @@ export async function plantillaTrabajoDelMes(
     // El Excel de trabajo incluye la columna CUENTA: la cuenta_bancaria se pide
     // aparte, por RPC con gate (Administración/Gerencia), porque la columna no se
     // lee directo desde el navegador (auditoría 05/11, V2). legajo_visual = etiqueta de Visual.
+    // El CUIL tampoco: sale de usuarios_datos_personales (F-06), abajo.
     fetchPaginadoResult((d, h) => client.from('usuarios')
-      .select('id, nombre, apellido, rol, puesto_organizacional, estado, es_prueba, cuil, legajo, legajo_visual')
+      .select('id, nombre, apellido, rol, puesto_organizacional, estado, es_prueba, legajo, legajo_visual')
       .order('apellido').order('id').range(d, h)),
     client.from('objetivos').select('id, nombre, es_prueba, zona_id, nocturnidad_activa, nocturnidad_desde, nocturnidad_hasta').order('nombre'),
     client.from('supervisor_zonas').select('supervisor_id, zona_id'),
@@ -526,7 +527,13 @@ export async function plantillaTrabajoDelMes(
 
   const rec = opts?.recorte
   const hastaRec = rec?.hasta ?? null
-  const usuarios = ((usuariosR.data ?? []) as any[]).filter(u => !rec || u.id === rec.empleadoId)
+  // CUIL por RPC con permiso (F-06). A diferencia de la cuenta, el CUIL identifica a
+  // la persona en Visual: si la RPC falla, el Excel no sale sin CUIL.
+  const ident = typeof client.rpc === 'function'
+    ? await cargarDatosPersonales(client, rec ? [rec.empleadoId] : null)
+    : { porId: new Map<string, DatosPersonalesUsuario>(), error: null }
+  if (ident.error) return { plantilla: null, filas: 0, error: `No se pudo leer el CUIL del personal: ${ident.error}` }
+  const usuarios = conDatosPersonales(((usuariosR.data ?? []) as any[]).filter(u => !rec || u.id === rec.empleadoId), ident.porId)
   const finRecExclusivo = hastaRec
     ? `${new Date(Date.UTC(Number(hastaRec.slice(0, 4)), Number(hastaRec.slice(5, 7)) - 1, Number(hastaRec.slice(8, 10)) + 1)).toISOString().slice(0, 10)}T00:00:00-03:00`
     : null

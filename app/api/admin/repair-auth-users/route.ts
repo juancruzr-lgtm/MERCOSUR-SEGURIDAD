@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auditAuthUsers, repairEmployeeAuthUser, summarizeRepairs } from '../../_lib/auth-repair'
 import { tieneCapacidad } from '@/lib/capacidades'
-import { getSupabaseAdmin, resolverPerfil } from '../../_lib/employee-auth'
+import { getBearerToken, getSupabaseAdmin, resolverPerfil } from '../../_lib/employee-auth'
+import { recortarParaLaSesion } from '../../_lib/datos-personales-respuesta'
 import { filtrarOperables } from '../../_lib/destino-usuario'
 import { marcarCambioObligatorio } from '../../_lib/acceso-password'
 
@@ -91,7 +92,7 @@ export async function POST(req: NextRequest) {
       report,
       summary,
       results,
-      users: refreshedUsers || [],
+      users: await recortarParaLaSesion(getBearerToken(req), refreshedUsers || []), // DNI/teléfono/CUIL: sólo lo que la sesión puede ver según la base (F-06).
       message: `Reparacion Auth finalizada: ${summary.reparados} reparados, ${summary.recreados} recreados, ${summary.creados} creados, ${summary.vinculados} vinculados, ${summary.omitidos} omitidos, ${summary.errores} errores.`,
     })
   } catch (error) {
