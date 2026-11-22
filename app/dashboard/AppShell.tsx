@@ -30,6 +30,7 @@ import { consultarCambioPassword } from '@/lib/acceso-password-dni'
 import { COLUMNAS_USUARIO, conDatosPersonalesPropios } from '@/lib/usuarios-columnas'
 import { MENSAJES_SESION, verificarSesion } from '@/lib/sesion-perfil'
 import { recargarSiHayVersionNueva } from '@/lib/version-app'
+import { vigilarSesion } from '@/lib/sesion-vigilancia'
 import NuevaPassword from '@/components/auth/NuevaPassword'
 import Login, { aplicarCierreDeSesion, resolverDelegacionGerencia } from './Login'
 
@@ -133,6 +134,16 @@ export default function AppShell() {
       document.removeEventListener('visibilitychange', alVolver)
     }
   }, [intentoSinVerificar, arrancar])
+
+  // Con la app abierta: si la sesión se cierra o vence (otra pestaña, token
+  // revocado, cierre en el servidor), se vuelve al inicio de sesión con aviso.
+  // Antes la app seguía mostrando las pantallas y todo lo que se guardaba
+  // volvía con 401 sin explicación (Sabino, 22/11/2026).
+  const enUso = estado.fase === 'listo'
+  useEffect(() => {
+    if (!enUso) return
+    return vigilarSesion(supabase as any, () => setEstado({ fase: 'login', error: MENSAJES_SESION.sesion_invalida }))
+  }, [enUso])
 
   const cancelarRecuperacion = useCallback(async () => {
     limpiarRecuperacionPendiente()
