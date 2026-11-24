@@ -27,7 +27,12 @@ import type { ClaveCriterio, Criterios, ListaDelMes, VigiladorAEvaluar } from '@
 const VERDE = '#10b981'
 const AMBAR = '#f59e0b'
 
-export default function EvaluacionVigiladoresSupervisor() {
+/**
+ * La usan el supervisor (Inicio de SupervisorMobile) y Gerencia (solapa de
+ * avance en Administración). Con `onCambio`, quien la monta se entera de cada
+ * evaluación guardada para refrescar lo suyo.
+ */
+export default function EvaluacionVigiladoresSupervisor({ onCambio }: { onCambio?: () => void } = {}) {
   const [lista, setLista] = useState<ListaDelMes | null>(null)
   const [abierta, setAbierta] = useState(false)
   const [elegido, setElegido] = useState<VigiladorAEvaluar | null>(null)
@@ -67,7 +72,7 @@ export default function EvaluacionVigiladoresSupervisor() {
                 periodo={lista.periodo}
                 vigilador={elegido}
                 onVolver={() => setElegido(null)}
-                onGuardado={async () => { setElegido(null); await cargar() }}
+                onGuardado={async () => { setElegido(null); await cargar(); onCambio?.() }}
               />
             ) : (
               <ListaEvaluacion lista={lista} onElegir={setElegido} onCerrar={() => setAbierta(false)} />

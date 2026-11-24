@@ -122,6 +122,7 @@ import ControlPreventivoPanel from '@/components/control-preventivo/ControlPreve
 import { controlPreventivoVisible } from '@/lib/control-preventivo'
 import SalidasAnticipadasPanel from '@/components/supervisiones/SalidasAnticipadasPanel'
 import EvaluacionSupervisoresPanel from '@/components/supervisiones/EvaluacionSupervisoresPanel'
+import EvaluacionVigiladoresAvance from '@/components/desempeno/EvaluacionVigiladoresAvance'
 import { useAccesoLegajoSupervisores } from '@/components/supervisiones/useAccesoLegajoSupervisores'
 // Mismo panel de configuración que usa el legajo del objetivo. Se monta también
 // en la solapa Rondas para poder editar rondas y puntos sin entrar objetivo por
@@ -1503,7 +1504,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
   const [busquedaGuardias, setBusquedaGuardias] = useState('')
   // Desempeno vive aca, dentro de Guardias/Empleados: es otra forma de mirar a
   // la misma gente, no una aplicacion aparte.
-  const [vista, setVista] = useState<'empleados' | 'desempeno' | 'gerencia'>('empleados')
+  const [vista, setVista] = useState<'empleados' | 'desempeno' | 'gerencia' | 'evaluacion_supervisor'>('empleados')
 
   // El Panel Principal entra directo al detalle de la evaluación. Sin esto, el
   // "Ver detalle →" dejaba al usuario en la lista de empleados teniendo que
@@ -2132,6 +2133,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
         { id:'empleados' as const, texto:'Empleados' },
         { id:'desempeno' as const, texto:'Cumplimiento operativo' },
         { id:'gerencia' as const, texto:'Tablero de Gerencia' },
+        { id:'evaluacion_supervisor' as const, texto:'Evaluación por supervisor' },
       ]).map(op => (
         <button
           key={op.id}
@@ -2149,6 +2151,21 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       ))}
     </div>
   )
+
+  // Evaluación de vigiladores por supervisor (planilla R 6.2 (3)): avance para
+  // Administración y Gerencia; Gerencia además evalúa desde acá.
+  if (vista === 'evaluacion_supervisor') {
+    return (
+      <div>
+        <div style={{ marginBottom:20 }}>
+          <div style={S.title}>Guardias / Empleados</div>
+          <div style={S.sub2}>Evaluación mensual de vigiladores por supervisor</div>
+        </div>
+        {conmutadorVista}
+        <EvaluacionVigiladoresAvance />
+      </div>
+    )
+  }
 
   if (vista === 'gerencia') {
     return (

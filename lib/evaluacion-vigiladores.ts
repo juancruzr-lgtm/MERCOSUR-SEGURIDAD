@@ -161,3 +161,85 @@ export async function guardarEvaluacion(args: {
   if (error) return { evaluacion: null, error: error.message }
   return { evaluacion: data as EvaluacionVigilador, error: null }
 }
+
+// ── Avance para Administración y Gerencia ────────────────────────────────────
+
+export interface EvaluacionDeAvance extends Record<ClaveCriterio, number> {
+  vigilador_id: string
+  nombre: string | null
+  apellido: string | null
+  legajo: string | null
+  puntaje: number
+  observaciones: string | null
+  plan_accion: string | null
+  origen: 'campana' | 'supervision'
+  updated_at: string
+}
+
+export interface PendienteDeAvance {
+  vigilador_id: string
+  nombre: string | null
+  apellido: string | null
+  legajo: string | null
+  objetivo: string | null
+}
+
+export interface EvaluadorAvance {
+  evaluador_id: string
+  nombre: string | null
+  apellido: string | null
+  es_gerencia: boolean
+  zonas: string[]
+  /** A evaluar con la ventana de turnos de HOY (para un mes pasado, aproximado). */
+  total: number
+  hechas: number
+  /** El promedio que pone ese evaluador (null si no evaluó a nadie). */
+  promedio: number | null
+  evaluaciones: EvaluacionDeAvance[]
+  /** Sólo en el mes en curso. */
+  pendientes: PendienteDeAvance[]
+}
+
+export interface VigiladorAvance {
+  vigilador_id: string
+  nombre: string | null
+  apellido: string | null
+  legajo: string | null
+  cantidad: number
+  promedio: number
+  minimo: number
+  maximo: number
+}
+
+export interface AvanceEvaluacion {
+  periodo: string
+  es_mes_actual: boolean
+  periodos: string[]
+  evaluadores: EvaluadorAvance[]
+  vigiladores: VigiladorAvance[]
+}
+
+/** Diferencia entre la nota más alta y la más baja que recibió un vigilador. */
+export const DIFERENCIA_A_MIRAR = 2
+
+export function difiere(v: Pick<VigiladorAvance, 'cantidad' | 'minimo' | 'maximo'>): boolean {
+  return v.cantidad > 1 && Number(v.maximo) - Number(v.minimo) >= DIFERENCIA_A_MIRAR
+}
+
+export function totalesAvance(a: AvanceEvaluacion | null): { hechas: number; total: number } {
+  const ev = a?.evaluadores ?? []
+  return {
+    hechas: ev.reduce((s, e) => s + Number(e.hechas), 0),
+    total: ev.reduce((s, e) => s + Math.max(Number(e.total), Number(e.hechas)), 0),
+  }
+}
+
+export function nombreEvaluador(e: Pick<EvaluadorAvance, 'nombre' | 'apellido'>): string {
+  return [e.apellido, e.nombre].filter(Boolean).join(', ') || 'Sin nombre'
+}
+
+export async function cargarAvance(periodo?: string): Promise<{ avance: AvanceEvaluacion | null; error: string | null }> {
+  const { data, error } = await supabase.rpc('evaluacion_vigiladores_avance', { p_periodo: periodo ?? null })
+  if (error) return { avance: null, error: error.message }
+  return { avance: data as AvanceEvaluacion, error: null }
+}
