@@ -47,6 +47,7 @@ import type { OrigenResolucion } from '@/lib/responsables-operativos'
 import { alertaEstaIntervenida, calcularMinutosTardanzaRegistro, claveOcurrenciaAlerta, compararIntervencionesMasReciente, efectoIntervencionOperativa, evaluarSinFichar, intervencionesDeOcurrencia } from '@/lib/revision-operativa'
 import type { AccionIntervencionOperativa, TipoAlertaOperativa as TipoAlertaOperativaCompartida } from '@/lib/revision-operativa'
 import AvisoEstatuto from '@/components/estatuto/AvisoEstatuto'
+import EvaluacionVigiladoresSupervisor from '@/components/supervisor/EvaluacionVigiladoresSupervisor'
 import ExcepcionAsistenciaPaso from '@/components/asistencia/ExcepcionAsistenciaPaso'
 import { esConfirmacionSinEvidencia } from '@/lib/excepcion-asistencia'
 import { COLUMNAS_USUARIO, cargarDatosPersonales, conDatosPersonales } from '@/lib/usuarios-columnas'
@@ -3408,6 +3409,10 @@ export default function SupervisorMobile({ user }: any) {
         {!loading && user?.id && (
           <AvisoEstatuto empleadoId={user.id} destino="/estatuto" />
         )}
+
+        {/* Evaluación mensual de vigiladores de su zona (planilla R 6.2 (3)).
+            Tarjeta fija mientras falten: insiste sin bloquear nada. */}
+        {!loading && user?.id && <EvaluacionVigiladoresSupervisor />}
 
         {loading ? (
           <div style={empty}>Cargando operación...</div>
