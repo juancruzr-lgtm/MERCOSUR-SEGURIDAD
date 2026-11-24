@@ -91,6 +91,35 @@ export function TarjetaEvaluacionVigiladores({ lista, onAbrir }: {
   onAbrir: () => void
 }) {
   const { hechas, total, pendientes } = avance(lista)
+  // Administración evalúa cuando quiere: misma puerta, sin insistir.
+  if (lista.opcional) {
+    return (
+      <section
+        aria-label="Evaluación mensual de vigiladores"
+        style={{
+          background: '#0f172a', border: '1px solid #1e293b', borderLeft: '4px solid #38bdf8',
+          borderRadius: 10, padding: '14px 14px 12px', marginBottom: 12, color: '#e2e8f0',
+        }}
+      >
+        <div style={{ fontWeight: 800, fontSize: 14.5, color: '#38bdf8', marginBottom: 4 }}>
+          Evaluá a cualquier vigilador cuando quieras
+        </div>
+        <div style={{ fontSize: 13, color: '#cbd5e1', marginBottom: 10 }}>
+          {hechas === 1 ? '1 evaluación hecha' : `${hechas} evaluaciones hechas`} en {nombrePeriodo(lista.periodo)}
+        </div>
+        <button
+          type="button"
+          onClick={onAbrir}
+          style={{
+            width: '100%', background: 'transparent', color: '#38bdf8', border: '1px solid #38bdf8',
+            borderRadius: 8, padding: '10px 12px', fontSize: 14, fontWeight: 800, cursor: 'pointer',
+          }}
+        >
+          Evaluar
+        </button>
+      </section>
+    )
+  }
   const completa = pendientes === 0
   const color = completa ? VERDE : AMBAR
   return (
