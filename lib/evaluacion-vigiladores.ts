@@ -66,6 +66,8 @@ export interface VigiladorAEvaluar {
 export interface ListaDelMes {
   periodo: string
   cierra: string
+  /** Administración evalúa cuando quiere: la tarjeta no le insiste. */
+  opcional?: boolean
   vigiladores: VigiladorAEvaluar[]
 }
 
@@ -189,6 +191,8 @@ export interface EvaluadorAvance {
   nombre: string | null
   apellido: string | null
   es_gerencia: boolean
+  /** Administración: evalúa a quien quiera, sin un total que cumplir. */
+  es_administracion?: boolean
   zonas: string[]
   /** A evaluar con la ventana de turnos de HOY (para un mes pasado, aproximado). */
   total: number
@@ -230,7 +234,8 @@ export function totalesAvance(a: AvanceEvaluacion | null): { hechas: number; tot
   const ev = a?.evaluadores ?? []
   return {
     hechas: ev.reduce((s, e) => s + Number(e.hechas), 0),
-    total: ev.reduce((s, e) => s + Math.max(Number(e.total), Number(e.hechas)), 0),
+    // Administración no tiene un total que cumplir: cuenta sólo lo que hizo.
+    total: ev.reduce((s, e) => s + (e.es_administracion ? Number(e.hechas) : Math.max(Number(e.total), Number(e.hechas))), 0),
   }
 }
 

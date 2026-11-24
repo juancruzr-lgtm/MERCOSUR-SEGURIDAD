@@ -124,3 +124,45 @@ describe('migración de avance', () => {
     expect(sql).not.toMatch(/select[^;]*\binto\s+v_/i)
   })
 })
+
+// ── Administración evalúa cuando quiere (JC, 24/11/2026) ─────────────────────
+import { TarjetaEvaluacionVigiladores } from '@/components/supervisor/EvaluacionVigiladoresSupervisor'
+
+describe('Administración evalúa a cualquiera, cuando quiere', () => {
+  it('la tarjeta no insiste: invita', () => {
+    const html = renderToStaticMarkup(
+      <TarjetaEvaluacionVigiladores onAbrir={nada} lista={{
+        periodo: '2026-11', cierra: '2026-11-30', opcional: true,
+        vigiladores: [{ vigilador_id: 'v1', nombre: 'A', apellido: 'B', legajo: null, objetivo: null, evaluacion: null }],
+      }} />,
+    )
+    expect(html).toContain('Evaluá a cualquier vigilador cuando quieras')
+    expect(html).toContain('0 evaluaciones hechas en noviembre 2026')
+    expect(html).not.toContain('Te falta')
+  })
+
+  it('en el avance va aparte y sin un total que cumplir', () => {
+    const conAdm: AvanceEvaluacion = {
+      ...avance,
+      evaluadores: [...avance.evaluadores, {
+        evaluador_id: 'a1', nombre: 'Laura', apellido: 'M', es_gerencia: false, es_administracion: true, zonas: [],
+        total: 60, hechas: 3, promedio: 8, evaluaciones: [], pendientes: [],
+      }],
+    }
+    const html = renderToStaticMarkup(<VistaAvanceEvaluacion avance={conAdm} onPeriodo={nada} onActualizar={nada} />)
+    expect(html).toContain('Administración · evalúa cuando quiere')
+    expect(html).toContain('3 evaluaciones')
+    expect(html).not.toContain('3 de 60')
+    expect(totalesAvance(conAdm)).toEqual({ hechas: 4, total: 159 })
+  })
+
+  const sql2 = readFileSync(
+    join(__dirname, '..', 'supabase', 'migrations', '20261224130000_evaluacion_vigiladores_administracion.sql'), 'utf8',
+  )
+  it('migración: Administración evalúa a todos y su tarjeta es opcional', () => {
+    expect(sql2).toMatch(/public\.evaluacion_es_gerencia\(p_supervisor_id\)\s+or public\.evaluacion_es_administracion\(p_supervisor_id\) as si/)
+    expect(sql2).toMatch(/'opcional', public\.evaluacion_es_administracion\(v_uid\)/)
+    expect(sql2).toMatch(/v_uid\s+uuid := public\.evaluacion_evaluador_actual\(\);/)
+    expect(sql2).not.toMatch(/select[^;]*\binto\s+v_/i)
+  })
+})

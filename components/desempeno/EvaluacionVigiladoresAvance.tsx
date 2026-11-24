@@ -75,7 +75,8 @@ export function VistaAvanceEvaluacion({ avance, onPeriodo, onActualizar, abierto
 }) {
   const [abierto, setAbierto] = useState<string | null>(abiertoInicial)
   const { hechas, total } = totalesAvance(avance)
-  const supervisores = avance.evaluadores.filter(e => !e.es_gerencia)
+  const supervisores = avance.evaluadores.filter(e => !e.es_gerencia && !e.es_administracion)
+  const administracion = avance.evaluadores.filter(e => e.es_administracion)
   const gerencia = avance.evaluadores.filter(e => e.es_gerencia)
 
   return (
@@ -120,6 +121,15 @@ export function VistaAvanceEvaluacion({ avance, onPeriodo, onActualizar, abierto
       {gerencia.length > 0 && (
         <Seccion titulo="Gerencia">
           {gerencia.map(e => (
+            <FilaEvaluador key={e.evaluador_id} e={e} abierto={abierto === e.evaluador_id}
+              onToggle={() => setAbierto(abierto === e.evaluador_id ? null : e.evaluador_id)} />
+          ))}
+        </Seccion>
+      )}
+
+      {administracion.length > 0 && (
+        <Seccion titulo="Administración">
+          {administracion.map(e => (
             <FilaEvaluador key={e.evaluador_id} e={e} abierto={abierto === e.evaluador_id}
               onToggle={() => setAbierto(abierto === e.evaluador_id ? null : e.evaluador_id)} />
           ))}
@@ -174,12 +184,18 @@ function FilaEvaluador({ e, abierto, onToggle }: { e: EvaluadorAvance; abierto: 
         <div style={{ flex: '1 1 200px', minWidth: 0 }}>
           <div style={{ fontWeight: 700, color: '#e2e8f0' }}>{nombreEvaluador(e)}</div>
           <div style={{ fontSize: 12.5, color: GRIS }}>
-            {e.es_gerencia ? 'Gerencia · todos los vigiladores' : (e.zonas.length ? e.zonas.join(', ') : 'Sin zona')}
+            {e.es_gerencia ? 'Gerencia · todos los vigiladores'
+              : e.es_administracion ? 'Administración · evalúa cuando quiere'
+              : (e.zonas.length ? e.zonas.join(', ') : 'Sin zona')}
           </div>
         </div>
         <div style={{ flex: '1 1 160px' }}>
+          {e.es_administracion ? (
+            <div style={{ fontSize: 13, color: VERDE, fontWeight: 700 }}>{hechas} {hechas === 1 ? 'evaluación' : 'evaluaciones'}</div>
+          ) : (<>
           <div style={{ fontSize: 13, color, fontWeight: 700 }}>{hechas} de {total}</div>
           <Barra hechas={hechas} total={total} color={color} />
+          </>)}
         </div>
         <div style={{ flex: '0 1 150px', fontSize: 13, color: '#e2e8f0' }}>
           {e.promedio == null ? <span style={{ color: GRIS }}>Sin evaluaciones</span>
@@ -207,7 +223,7 @@ function FilaEvaluador({ e, abierto, onToggle }: { e: EvaluadorAvance; abierto: 
               {ev.plan_accion && <div style={{ color: '#cbd5e1', fontSize: 12.5 }}>Plan de acción: {ev.plan_accion}</div>}
             </div>
           ))}
-          {e.pendientes.length > 0 && (
+          {!e.es_administracion && e.pendientes.length > 0 && (
             <div style={{ marginTop: 8, fontSize: 12.5, color: AMBAR }}>
               Le faltan ({e.pendientes.length}): <span style={{ color: '#cbd5e1' }}>{e.pendientes.map(p => nombreVigilador(p)).join('; ')}</span>
             </div>
