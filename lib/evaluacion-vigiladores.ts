@@ -248,3 +248,82 @@ export async function cargarAvance(periodo?: string): Promise<{ avance: AvanceEv
   if (error) return { avance: null, error: error.message }
   return { avance: data as AvanceEvaluacion, error: null }
 }
+
+// ── Planilla: una fila por evaluación, y agrupada por vigilador ──────────────
+
+export interface FilaPlanilla extends EvaluacionDeAvance {
+  evaluador_id: string
+  evaluador: string
+  /** 'Supervisor' | 'Gerencia' | 'Administración' */
+  rol_evaluador: string
+}
+
+function rolEvaluador(e: Pick<EvaluadorAvance, 'es_gerencia' | 'es_administracion'>): string {
+  return e.es_gerencia ? 'Gerencia' : e.es_administracion ? 'Administración' : 'Supervisor'
+}
+
+function compararNombre(a: { apellido: string | null; nombre: string | null }, b: { apellido: string | null; nombre: string | null }): number {
+  return nombreVigilador(a).localeCompare(nombreVigilador(b), 'es')
+}
+
+/** Todas las evaluaciones del mes, por vigilador y, dentro, por evaluador. */
+export function filasPlanilla(a: AvanceEvaluacion | null): FilaPlanilla[] {
+  const filas: FilaPlanilla[] = []
+  for (const e of a?.evaluadores ?? []) {
+    for (const ev of e.evaluaciones) {
+      filas.push({ ...ev, evaluador_id: e.evaluador_id, evaluador: nombreEvaluador(e), rol_evaluador: rolEvaluador(e) })
+    }
+  }
+  return filas.sort((x, y) => compararNombre(x, y) || x.evaluador.localeCompare(y.evaluador, 'es'))
+}
+
+export interface GrupoVigilador {
+  vigilador_id: string
+  nombre: string | null
+  apellido: string | null
+  legajo: string | null
+  evaluaciones: FilaPlanilla[]
+  promedio: number
+  minimo: number
+  maximo: number
+}
+
+/** Cada vigilador con todas sus evaluaciones del mes, una debajo de la otra. */
+export function gruposPorVigilador(a: AvanceEvaluacion | null): GrupoVigilador[] {
+  const grupos = new Map<string, GrupoVigilador>()
+  for (const f of filasPlanilla(a)) {
+    let g = grupos.get(f.vigilador_id)
+    if (!g) {
+      g = { vigilador_id: f.vigilador_id, nombre: f.nombre, apellido: f.apellido, legajo: f.legajo,
+        evaluaciones: [], promedio: 0, minimo: 0, maximo: 0 }
+      grupos.set(f.vigilador_id, g)
+    }
+    g.evaluaciones.push(f)
+  }
+  return Array.from(grupos.values()).map(g => {
+    const p = g.evaluaciones.map(e => Number(e.puntaje))
+    return {
+      ...g,
+      promedio: Math.round((p.reduce((s, x) => s + x, 0) / p.length) * 100) / 100,
+      minimo: Math.min(...p),
+      maximo: Math.max(...p),
+    }
+  })
+}
+
+/**
+ * Vigiladores que todavía nadie evaluó este mes (sólo mes en curso: sale de
+ * los pendientes de los supervisores, que se calculan con los turnos de hoy).
+ * Gerencia y Administración no cuentan: tienen a todos como "pendientes".
+ */
+export function sinEvaluar(a: AvanceEvaluacion | null): PendienteDeAvance[] {
+  const evaluados = new Set(filasPlanilla(a).map(f => f.vigilador_id))
+  const vistos = new Map<string, PendienteDeAvance>()
+  for (const e of a?.evaluadores ?? []) {
+    if (e.es_gerencia || e.es_administracion) continue
+    for (const p of e.pendientes) {
+      if (!evaluados.has(p.vigilador_id) && !vistos.has(p.vigilador_id)) vistos.set(p.vigilador_id, p)
+    }
+  }
+  return Array.from(vistos.values()).sort(compararNombre)
+}
