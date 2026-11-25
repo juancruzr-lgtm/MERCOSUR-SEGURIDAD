@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { abrirDocumento, api, leer, rpc, subirDocumento } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
-import { conVencimiento, detalleVencimiento, vencimientoDe, type CondicionesPago } from '@/lib/facturacion/estado-cobro'
+import { conVencimiento, detalleVencimiento, estadoCobro, vencimientoDe, type CondicionesPago } from '@/lib/facturacion/estado-cobro'
 import { cargarCondicionesPago } from '@/lib/facturacion/condiciones-pago'
 import { textoParaCliente, totalIntereses, useIntereses } from '@/lib/facturacion/intereses-cobranzas'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
@@ -180,7 +180,10 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
   useEffect(() => { correr(cargar) }, [clienteId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const aplicado = (campo: 'cobro_id' | 'retencion_id', id: string) => d.aps.filter(a => a[campo] === id && !a.revertida_at).reduce((s, a) => s + Number(a.importe_c), 0)
-  const deuda = d.saldos.reduce((s, x) => s + Math.max(0, Number(x.saldo_c)), 0)
+  // Lo que falta de una factura ya cobrada (hasta el 25 %) son retenciones que el cliente todavía no mandó: no es deuda.
+  const esRestoRetenciones = (x: any) => estadoCobro(x, fechaArgentina()).estado === 'cobrada_retenciones'
+  const deuda = d.saldos.filter(x => !esRestoRetenciones(x)).reduce((s, x) => s + Math.max(0, Number(x.saldo_c)), 0)
+  const restoRetenciones = d.saldos.filter(esRestoRetenciones).reduce((s, x) => s + Math.max(0, Number(x.saldo_c)), 0)
   const deudaCargos = d.cargos.reduce((s, x) => s + Math.max(0, Number(x.saldo_c)), 0)
   const nv = (s: any) => numeroVisible({ tipo: s.tipo, puntoVenta: s.punto_venta, numero: Number(s.numero) })
 
@@ -229,6 +232,7 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
       <Mensaje />
       <div style={{ ...S.fila, ...S.sub }}>
         <span>Deuda en comprobantes: <b style={{ color: '#e2e8f0' }}>{pesos(deuda)}</b></span>
+        {restoRetenciones > 0 && <span title="Facturas cobradas a las que les falta cargar los certificados de retención: no es deuda">· Retenciones a certificar (no es deuda): {pesos(restoRetenciones)}</span>}
         {d.cargos.length > 0 && <span>· Remitos sin factura: <b style={{ color: '#e2e8f0' }}>{pesos(deudaCargos)}</b> · Total: <b style={{ color: '#e2e8f0' }}>{pesos(deuda + deudaCargos)}</b></span>}
         <span>· Intereses por mora a hoy (informativo): {intereses.cargando ? '…' : <b style={{ color: AMBAR }}>{pesos(totalInteres)}</b>}</span>
         {!intereses.cargando && totalInteres > 0 && <button style={{ ...S.btn2, padding: '2px 8px' }} onClick={() => correr(async () => {
@@ -244,7 +248,7 @@ function CuentaCliente({ clienteId, nombreCliente }: { clienteId: string; nombre
             {d.saldos.map(s => <tr key={s.comprobante_id} onClick={() => elegirFactura(s)} title={Number(s.saldo_c) > 0 ? 'Tocá para cargar un cobro de esta factura' : undefined}
               style={{ cursor: Number(s.saldo_c) > 0 ? 'pointer' : undefined, background: s.comprobante_id === selFac ? '#1e3a5f' : undefined }}><td style={S.td}>{nv(s)}</td><td style={S.td}>{fecha(s.fecha_emision)}<div style={S.sub} title={detalleVencimiento(s)}>vence {fecha(vencimientoDe(s))}</div></td>
               <td style={S.num}>{pesos(s.total_c)}{Number(s.nc_c) > 0 && <div style={S.sub}>NC {pesos(s.nc_c)}</div>}</td>
-              <td style={S.num}>{Number(s.saldo_c) <= 0 ? <span style={{ color: '#4ade80' }}>{Number(s.nc_c) >= Number(s.total_c) ? 'anulada' : 'pagada'}</span> : <b>{pesos(s.saldo_c)}</b>}
+              <td style={S.num}>{Number(s.saldo_c) <= 0 ? <span style={{ color: '#4ade80' }}>{Number(s.nc_c) >= Number(s.total_c) ? 'anulada' : 'pagada'}</span> : esRestoRetenciones(s) ? <span style={{ color: '#a3e635' }} title="Falta cargar las retenciones">cobrada<div style={S.sub}>faltan ret. {pesos(s.saldo_c)}</div></span> : <b>{pesos(s.saldo_c)}</b>}
                 {(() => {
                   const i = interesDe(s.comprobante_id)
                   return i && i.interes_c > 0 ? <div style={{ ...S.sub, color: i.noCobrar ? '#64748b' : AMBAR, textDecoration: i.noCobrar ? 'line-through' : undefined }}
@@ -349,7 +353,16 @@ Motivo:`)
             : <div style={S.sub}>Tocá una factura de la lista para precargar el cobro con su saldo.</div>}
 
           <h4 style={{ ...S.sub, marginTop: 12 }}>RETENCIONES</h4>
-          {d.rets.map(r => <div key={r.id} style={{ fontSize: 13 }}>{fecha(r.fecha)} · {r.impuesto} · cert. {r.certificado ?? '—'} · OP {r.orden_pago ?? '—'} · {pesos(r.importe_c)} · <b>{r.estado === 'estimada' ? 'ESTIMADA (no cancela)' : r.estado}</b></div>)}
+          {d.rets.map(r => <div key={r.id} style={{ ...S.fila, fontSize: 13, opacity: r.estado === 'anulada' ? 0.5 : 1 }}>
+            {fecha(r.fecha)} · {r.impuesto} · cert. {r.certificado ?? '—'} · OP {r.orden_pago ?? '—'} · {pesos(r.importe_c)} · <b>{r.estado === 'estimada' ? 'ESTIMADA (no cancela)' : r.estado === 'anulada' ? 'ANULADA' : r.estado}</b>
+            {r.estado !== 'anulada' && <button style={{ ...S.btnPeligro, padding: '2px 8px' }} disabled={ocupado} onClick={() => {
+              const m = prompt(`Anular la retención de ${r.impuesto} ${r.certificado ?? ''} por ${pesos(r.importe_c)} (por ejemplo, si se cargó dos veces).
+Si estaba aplicada, la factura vuelve a tener ese saldo. Queda en el historial.
+
+Motivo:`)
+              if (m) correr(async () => { await rpc('fact_retencion_anular', { p_id: r.id, p_motivo: m }); await cargar() }, 'Retención anulada')
+            }}>Anular</button>}
+          </div>)}
           <div style={S.fila}>
             <select style={S.input} value={ret.impuesto} onChange={e => setRet({ ...ret, impuesto: e.target.value })}>{['ganancias', 'iva', 'iibb', 'suss', 'otro'].map(x => <option key={x}>{x}</option>)}</select>
             <input style={{ ...S.input, width: 100 }} placeholder="Certificado" value={ret.certificado} onChange={e => setRet({ ...ret, certificado: e.target.value })} />
