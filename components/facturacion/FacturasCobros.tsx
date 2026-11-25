@@ -50,7 +50,7 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
       leer('fact_v_saldos', q => q.order('fecha_emision').order('punto_venta').order('numero').limit(5000)),
       leer('fact_clientes', q => q.order('razon_social'), 'id, razon_social, cuit'),
       leer('fact_aplicaciones', q => q.is('revertida_at', null).limit(10000), 'id, cobro_id, retencion_id, comprobante_id, importe_c, created_at'),
-      leer('fact_cobros', q => q.is('anulado_at', null).limit(10000), 'id, fecha, medio, importe_c, referencia, cheque_numero, cheque_banco, cheque_estado'),
+      leer('fact_cobros', q => q.is('anulado_at', null).limit(10000), 'id, cliente_id, fecha, medio, importe_c, referencia, cheque_numero, cheque_banco, cheque_estado'),
       cargarCondicionesPago(),
     ])
     // Vencimiento según el contrato vigente: si cambia el plazo, cambia solo.
@@ -91,9 +91,38 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
     retenciones: suma(f => f.estado === 'cobrada_retenciones'),
     intereses: totalIntereses(base.map(f => f.comprobante_id), intereses.porFactura),
   }
+  // Cobros que entraron y todavía no están asignados a una factura (neto de retenciones). Para compararlos con
+  // facturas (que son por el total) se llevan a valor de factura con el % que ese cliente suele cobrar en neto.
+  const sinAsignar = useMemo(() => {
+    const aplicadoCobro = new Map<string, number>()
+    for (const a of aps) if (a.cobro_id) aplicadoCobro.set(a.cobro_id, (aplicadoCobro.get(a.cobro_id) ?? 0) + Number(a.importe_c))
+    const netoPorCliente = new Map<string, number>()
+    for (const c of cobros) {
+      if (!c.cliente_id || (cli && c.cliente_id !== cli) || ['rechazado', 'anulado', 'endosado'].includes(c.cheque_estado)) continue
+      const resto = Number(c.importe_c) - (aplicadoCobro.get(c.id) ?? 0)
+      if (resto > 0) netoPorCliente.set(c.cliente_id, (netoPorCliente.get(c.cliente_id) ?? 0) + resto)
+    }
+    // % neto/total del cliente: lo cobrado en efectivo sobre el total de sus facturas ya cobradas.
+    const cobradoPorFactura = new Map<string, number>()
+    for (const a of aps) if (a.cobro_id && a.comprobante_id) cobradoPorFactura.set(a.comprobante_id, (cobradoPorFactura.get(a.comprobante_id) ?? 0) + Number(a.importe_c))
+    const ratio = (clienteId: string) => {
+      let neto = 0, total = 0
+      for (const f of enriquecidas) if (f.cliente_id === clienteId && ['pagada', 'cobrada_retenciones'].includes(f.estado) && cobradoPorFactura.get(f.comprobante_id)) {
+        neto += cobradoPorFactura.get(f.comprobante_id)!; total += Number(f.total_c) - Number(f.nc_c)
+      }
+      const r = total > 0 ? neto / total : 0.85
+      return Math.min(1, Math.max(0.6, r))
+    }
+    let neto = 0, equivalente = 0
+    netoPorCliente.forEach((n, clienteId) => { neto += n; equivalente += n / ratio(clienteId) })
+    return { neto, equivalente: Math.round(equivalente) }
+  }, [aps, cobros, enriquecidas, cli])
+  const vencidoNeto = Math.max(0, kpi.vencido - sinAsignar.equivalente)
   const tarjetas: Array<[string, string, string, string?]> = [
-    ['Facturado', pesos(kpi.facturado), '#e2e8f0'], ['Cobrado', pesos(kpi.cobrado), '#4ade80'], ['Vencido sin cobrar', pesos(kpi.vencido), '#f87171'],
+    ['Facturado', pesos(kpi.facturado), '#e2e8f0'], ['Cobrado', pesos(kpi.cobrado), '#4ade80'], ['Vencido sin cobrar', pesos(kpi.vencido), '#f87171', sinAsignar.neto > 0 ? `neto de cobros sin asignar: ${pesos(vencidoNeto)}` : undefined],
     ['Por vencer', pesos(kpi.porVencer), '#93c5fd'], ['Retenciones a certificar', pesos(kpi.retenciones), '#a3e635'],
+    ['Cobros sin asignar', pesos(sinAsignar.neto), '#fbbf24', sinAsignar.neto > 0 ? 'lo que entró al banco y falta asignar a una factura' : 'todo lo cobrado está asignado'],
+    ['Retenciones presuntas de esos cobros', pesos(sinAsignar.equivalente - sinAsignar.neto), '#a3e635', 'estimadas con el % que retiene cada cliente; se confirman con los certificados'],
     ['Intereses por mora (informativo)', intereses.cargando ? '…' : pesos(kpi.intereses), AMBAR,
       intereses.error ?? (intereses.general ? `Tasa general: ${describirTasa(intereses.general)}` : undefined)],
   ]
