@@ -10,7 +10,6 @@ import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { ETIQUETA_ESTADO, conVencimiento, detalleVencimiento, estadoCobro, vencimientoDe, type CondicionesPago, type EstadoCobro } from '@/lib/facturacion/estado-cobro'
 import { cargarCondicionesPago } from '@/lib/facturacion/condiciones-pago'
 import { totalIntereses, useIntereses, type InteresFactura } from '@/lib/facturacion/intereses-cobranzas'
-import { describirTasa } from '@/lib/facturacion/tasa-mora'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
 import { AMBAR, CeldaInteres, DetalleInteres } from './InteresFactura'
@@ -121,10 +120,9 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
   const tarjetas: Array<[string, string, string, string?]> = [
     ['Facturado', pesos(kpi.facturado), '#e2e8f0'], ['Cobrado', pesos(kpi.cobrado), '#4ade80'], ['Vencido sin cobrar', pesos(kpi.vencido), '#f87171', sinAsignar.neto > 0 ? `neto de cobros sin asignar: ${pesos(vencidoNeto)}` : undefined],
     ['Por vencer', pesos(kpi.porVencer), '#93c5fd'], ['Retenciones a certificar', pesos(kpi.retenciones), '#a3e635'],
-    ['Cobros sin asignar', pesos(sinAsignar.neto), '#fbbf24', sinAsignar.neto > 0 ? 'lo que entró al banco y falta asignar a una factura' : 'todo lo cobrado está asignado'],
-    ['Retenciones presuntas de esos cobros', pesos(sinAsignar.equivalente - sinAsignar.neto), '#a3e635', 'estimadas con el % que retiene cada cliente; se confirman con los certificados'],
-    ['Intereses por mora (informativo)', intereses.cargando ? '…' : pesos(kpi.intereses), AMBAR,
-      intereses.error ?? (intereses.general ? `Tasa general: ${describirTasa(intereses.general)}` : undefined)],
+    ['Cobros sin asignar', pesos(sinAsignar.neto), '#fbbf24', sinAsignar.neto > 0
+      ? `lo que entró al banco · + retenciones presuntas ${pesos(sinAsignar.equivalente - sinAsignar.neto)} (estimadas con el % de cada cliente) = ${pesos(sinAsignar.equivalente)} de facturas`
+      : 'todo lo cobrado está asignado'],
   ]
 
   return (
