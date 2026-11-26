@@ -2367,6 +2367,13 @@ export default function SupervisorMobile({ user }: any) {
         }),
       })
 
+      if (saveRes.status === 401) {
+        // Sesión cerrada o vencida: decirlo claro (antes salía "Sesion invalida" y nada más).
+        // La vigilancia de AppShell lo lleva al inicio de sesión.
+        // A los 5 s (para que lea el aviso) se cierra la sesión vieja de este celular.
+        setTimeout(() => { void supabase.auth.signOut({ scope: 'local' }) }, 5000)
+        throw new Error('Tu sesión se cerró. Volvé a entrar con tu email y contraseña y cargala de nuevo: esta supervisión NO se guardó.')
+      }
       if (!saveRes.ok) {
         const err = await saveRes.json().catch(() => ({ error: 'Error al guardar la supervisión' }))
         throw new Error(err.error || 'Error al guardar la supervisión')
