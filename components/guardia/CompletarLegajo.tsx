@@ -155,7 +155,7 @@ export default function CompletarLegajo({ empleadoId, inicial, onCerrar, onPrime
         {todoListo && (
           <div style={{ ...card, borderColor: 'rgba(34,197,94,.45)' }}>
             <div style={{ fontSize: 16, fontWeight: 800, color: '#86efac', marginBottom: 6 }}>✓ ¡Listo! Tu legajo está completo.</div>
-            <div style={{ fontSize: 13.5, color: '#94a3b8', marginBottom: 12 }}>Administración va a revisar los datos y los documentos. Si falta algo, te avisa.</div>
+            <div style={{ fontSize: 13.5, color: '#94a3b8', marginBottom: 12 }}>Tus datos y tu DNI ya quedaron en tu legajo. Si falta algo, te avisamos.</div>
             <button type="button" style={{ ...primario(true), width: '100%' }} onClick={onCerrar}>Volver a la app</button>
           </div>
         )}
