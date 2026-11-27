@@ -179,26 +179,13 @@ Impacto estimado en `simulacion_desempeno_octubre.md`.
 
 ## 5. Rotación del secreto del cron de IA
 
-El valor actual estuvo legible para cualquier usuario autenticado: hay que
-considerarlo comprometido. **Nadie debe copiarlo, mostrarlo ni pegarlo en
-chats o tickets.**
-
-1. Generar un secreto nuevo en una terminal propia (p. ej. `openssl rand -hex 32`).
-2. Vercel → Settings → Environment Variables (Production):
-   - `IA_CRON_SECRET_ANTERIOR` = valor actual de `IA_CRON_SECRET` (copiar dentro de Vercel);
-   - `IA_CRON_SECRET` = el nuevo. Redeploy.
-   Durante este paso la ruta acepta los dos (`lib/ia/cron-auth.ts`).
-3. Supabase → SQL editor:
-   `select vault.create_secret('<NUEVO>', 'ia_cron_secret', 'Secreto del cron de IA');`
-   (si ya existiera: `select vault.update_secret(id, '<NUEVO>') from vault.secrets where name = 'ia_cron_secret';`).
-   Desde ese momento `ia_disparar_analisis()` usa el de Vault.
-4. Esperar 10 minutos y comprobar `status_code = 200` en `net._http_response`.
-5. Retirar el valor viejo de la base:
-   `update public.app_config set value = '' where key = 'ia_cron_secret';`
-6. Borrar `IA_CRON_SECRET_ANTERIOR` en Vercel y redeploy. Comprobar otra vez el 200.
-
-Si en el paso 4 hay 401: el valor de Vault y el de Vercel no coinciden; no
-avanzar al paso 5.
+**Reemplazado (04/11/2026) por `docs/ROTACION-SECRETO-IA.md`** y
+`supabase/manual/ia_cron_secret_rotacion.sql`. El procedimiento que estaba
+acá generaba el secreto fuera de la base y lo pegaba en el SQL editor (queda
+en el historial) y lo creaba en Vault con su nombre definitivo antes de que
+Vercel lo aceptara: con 20261120140000 ya aplicada, eso cortaba el cron con
+401 hasta el redeploy. El nuevo crea el secreto dentro de la base con un
+nombre de espera y lo renombra cuando Vercel ya acepta los dos valores.
 
 ## 6. Vuelta atrás
 
