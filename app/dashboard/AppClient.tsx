@@ -1492,7 +1492,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     window.addEventListener('keydown', esc)
     return () => window.removeEventListener('keydown', esc)
   }, [bajaDe])
-  const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', puesto_organizacional:'', foto_url:'', es_prueba:false }
+  const formVacio = { nombre:'', apellido:'', dni:'', cuil:'', legajo_visual:'', cuenta_bancaria:'', telefono:'', legajo:'', email:'', estado:'activo', rol:'guardia', puesto_organizacional:'', foto_url:'', es_prueba:false, excluir_visual:false }
   // Fase 2D: quién puede asignar niveles privilegiados. Administración gestiona
   // rol/puesto NORMALES; 'admin'/'gerencia'/delegación quedan para Gerencia real.
   const esGerReal = esGerenciaReal(user)
@@ -1649,6 +1649,7 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
     puesto_organizacional: (g as any).puesto_organizacional || '',
     foto_url: g.foto_url || '',
     es_prueba: Boolean(g.es_prueba),
+    excluir_visual: Boolean((g as any).excluir_visual),
   })
 
   const abrirEdicion = async (g: Usuario) => {
@@ -1800,6 +1801,8 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
       // endpoint valida alcance (Administración: puestos normales; 'gerencia'
       // reservado a Gerencia real).
       ...(form.puesto_organizacional ? { puesto_organizacional: form.puesto_organizacional } : {}),
+      // "Lleva recibo" (va a Visual) → excluir_visual es la inversa.
+      excluir_visual: Boolean(form.excluir_visual),
     } as Record<string, unknown>
 
     // es_prueba viaja solo si la columna ya existe en la base (el select('*')
@@ -2537,6 +2540,16 @@ function Guardias({ guardias, setGuardias, filtroActivo, limpiarFiltro, esAdmin,
               <div style={{ marginBottom:16 }}>
                 <label style={S.label}>Legajo Visual Sueldos</label>
                 <input style={S.input} value={form.legajo_visual} onChange={e => setForm({...form, legajo_visual:e.target.value})} />
+              </div>
+            )}
+
+            {esAdmin && (
+              <div style={{ marginBottom:16 }}>
+                <label style={{ display:'flex', alignItems:'center', cursor:'pointer' }}>
+                  <input type="checkbox" checked={!form.excluir_visual} onChange={e => setForm({...form, excluir_visual: !e.target.checked})} style={{ marginRight:8 }} />
+                  <span>Lleva recibo (se exporta a Visual)</span>
+                </label>
+                <div style={{ fontSize:12, color:'#64748b', marginTop:4 }}>Destildá sólo a quien no se liquida por Visual (gerencia/jefatura sin recibo).</div>
               </div>
             )}
 

@@ -49,7 +49,7 @@ describe('usuarios sin CBU desde el navegador (V2)', () => {
     const m = sql.match(/grant select \(([^)]+)\) on public\.usuarios to authenticated/i)
     expect(m).not.toBeNull()
     // Columnas nuevas se conceden en migraciones posteriores (la histórica no se toca).
-    const posteriores = ['20261213200000_facturacion_acceso_por_usuario.sql'].flatMap(n => {
+    const posteriores = ['20261213200000_facturacion_acceso_por_usuario.sql', '20261228100000_usuarios_excluir_visual.sql'].flatMap(n => {
       const x = readFileSync(join(RAIZ, 'supabase/migrations', n), 'utf8').match(/grant select \(([^)]+)\) on public\.usuarios to authenticated/i)
       return x ? x[1].split(',') : []
     })
