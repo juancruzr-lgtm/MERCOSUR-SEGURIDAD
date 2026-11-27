@@ -209,8 +209,9 @@ export async function escribirPlanillaPersonalVisual(empleados: EmpleadoVisual[]
   const fAoa: (string | number)[][] = [['Legajo', 'Empleado', 'Campos obligatorios que faltan']]
   for (const f of faltantes) fAoa.push([f.legajo, f.nombre, f.faltan.join(', ')])
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(fAoa), 'FALTANTES')
-  // .xls (BIFF8): Visual importa en formato Excel 97-2003, no .xlsx.
-  const buffer = XLSX.write(wb, { bookType: 'xls', type: 'array' }) as ArrayBuffer
+  // .xls BIFF8 real: Visual sólo acepta este formato (igual que el export de
+  // liquidación, lib/visual-export.ts). bookType 'biff8', no 'xls'.
+  const buffer = XLSX.write(wb, { bookType: 'biff8', type: 'array' }) as ArrayBuffer
   return {
     buffer,
     activos: empleados.filter(e => !dc(e.fecha_baja)).length,
