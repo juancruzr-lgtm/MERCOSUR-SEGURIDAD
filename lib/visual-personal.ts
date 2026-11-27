@@ -175,10 +175,11 @@ const OBLIGATORIOS: { campo: keyof EmpleadoVisual; etiqueta: string }[] = [
 
 const dc = (v: unknown): string => (v == null ? '' : String(v)).trim()
 
-// Legajo de Visual = APELLIDO NOMBRE (convención de la empresa, JC 27/11). El
-// campo `legajo_visual` guardado está sucio/inconsistente (a veces sólo apellido,
-// truncado o null), así que se arma siempre desde apellido + nombre.
-const legajoDe = (e: EmpleadoVisual): string => [dc(e.apellido), dc(e.nombre)].filter(Boolean).join(' ').toUpperCase()
+// Legajo (JC 27/11): para quien YA está en Visual se usa su legajo de Visual
+// (guardado en `legajo_visual`, refrescado desde el export de Visual por CUIL),
+// para que Visual lo ACTUALICE en vez de duplicarlo. Para los NUEVOS (sin
+// legajo de Visual) se usa el apellido.
+const legajoDe = (e: EmpleadoVisual): string => dc(e.legajo_visual) || dc(e.apellido).toUpperCase()
 
 // Fecha ISO (yyyy-mm-dd) → dd/MM/yyyy (formato Visual). Deja intacto lo que no
 // matchee para no romper un valor ya formateado.

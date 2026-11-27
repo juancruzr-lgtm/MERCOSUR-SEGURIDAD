@@ -20,7 +20,7 @@ const col = (h: string) => COLUMNAS_VISUAL.indexOf(h)
 describe('filaEmpleadoVisual', () => {
   it('mapea los campos en la posición correcta y aplica los defaults de JC', () => {
     const f = filaEmpleadoVisual(base())
-    expect(f[col('Legajo *')]).toBe('ALMADA ESTANISLAO') // APELLIDO NOMBRE (convención empresa)
+    expect(f[col('Legajo *')]).toBe('ALMADA')            // legajo de Visual para quien ya está
     expect(f[col('Cuil *')]).toBe('20144945817')
     expect(f[col('Tipo Doc. **')]).toBe('DNI')
     expect(f[col('Estado Civil **')]).toBe('Soltero/a')  // default
@@ -42,6 +42,10 @@ describe('filaEmpleadoVisual', () => {
     const cbu = filaEmpleadoVisual(base({ cuenta_bancaria: '0720237988000004763790' }))
     expect(cbu[col('CBU')]).toBe('0720237988000004763790')
     expect(cbu[col('Cuenta Bancaria')]).toBe('')
+  })
+
+  it('un NUEVO (sin legajo de Visual) usa el apellido como legajo', () => {
+    expect(filaEmpleadoVisual(base({ legajo_visual: null }))[col('Legajo *')]).toBe('ALMADA')
   })
 
   it('una baja liquidada lleva su fecha de baja (para inactivar en Visual)', () => {
