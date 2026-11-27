@@ -18,7 +18,7 @@ const dc = (v: unknown): string => (v == null ? '' : String(v)).trim()
  */
 async function cargarPersonalVisual(client: any, incluirBajas: boolean): Promise<{ empleados: EmpleadoVisual[]; error: string | null }> {
   const { data: us, error: eu } = await client.from('usuarios').select(CAMPOS_USUARIO)
-    .eq('estado', 'activo').not('es_prueba', 'is', true)
+    .eq('estado', 'activo').not('es_prueba', 'is', true).not('excluir_visual', 'is', true)
   if (eu) return { empleados: [], error: eu.message || String(eu) }
   const activos = (us ?? []) as any[]
 
@@ -35,7 +35,7 @@ async function cargarPersonalVisual(client: any, incluirBajas: boolean): Promise
     }
     const idsBaja = Array.from(bajaFecha.keys()).filter(id => !activos.some(a => String(a.id) === id))
     if (idsBaja.length) {
-      const { data: ub } = await client.from('usuarios').select(CAMPOS_USUARIO).in('id', idsBaja)
+      const { data: ub } = await client.from('usuarios').select(CAMPOS_USUARIO).in('id', idsBaja).not('excluir_visual', 'is', true)
       usuariosBaja = (ub ?? []) as any[]
     }
   }
