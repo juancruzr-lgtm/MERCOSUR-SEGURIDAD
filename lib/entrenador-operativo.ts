@@ -511,6 +511,62 @@ function aMinutos(hora: string): number | null {
   return m ? Number(m[1]) * 60 + Number(m[2]) : null
 }
 
+/** Turno mínimo para saber quién está trabajando ahora. */
+export interface TurnoEnCurso {
+  guardia_id: string | null
+  /** YYYY-MM-DD, fecha de INICIO del turno en hora argentina. */
+  fecha: string
+  hora_inicio: string | null
+  hora_fin: string | null
+  estado: string | null
+}
+
+/**
+ * Estados en los que la persona asignada NO está en el puesto. Cualquier otro
+ * —'programado', 'cubierto', uno nuevo o NULL— cuenta como trabajando: ante la
+ * duda no se le escribe a alguien que puede estar de guardia.
+ */
+export const ESTADOS_TURNO_SIN_PERSONA = new Set(['anulado', 'reemplazado', 'cancelado', 'descubierto'])
+
+/** "2026-09-01" → "2026-08-31". */
+export function fechaAnterior(fecha: string): string {
+  const d = new Date(`${fecha}T12:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - 1)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * Quiénes están en turno a esta hora local.
+ *
+ * Recibe los turnos de HOY y de AYER: un nocturno que empezó ayer (22 a 06,
+ * o uno de 24 h de 07 a 07) sigue en curso hoy hasta su hora de fin. Antes la
+ * ruta miraba sólo los turnos de hoy en estado 'programado', así que quien
+ * estaba en un turno 'cubierto' (226 en 30 días) o en el nocturno de ayer
+ * figuraba como libre y podía recibir el aviso en plena guardia.
+ */
+export function personasEnTurno(turnos: TurnoEnCurso[], fechaLocal: string, horaLocal: string): Set<string> {
+  const ahora = aMinutos(horaLocal)
+  const ayer = fechaAnterior(fechaLocal)
+  const out = new Set<string>()
+  if (ahora === null) return out
+  for (const t of turnos) {
+    if (!t.guardia_id) continue
+    if (t.estado && ESTADOS_TURNO_SIN_PERSONA.has(t.estado)) continue
+    const ini = aMinutos(String(t.hora_inicio ?? ''))
+    const fin = aMinutos(String(t.hora_fin ?? ''))
+    if (ini === null || fin === null) continue
+    const cruzaMedianoche = fin <= ini
+    let dentro = false
+    if (t.fecha === fechaLocal) {
+      dentro = cruzaMedianoche ? ahora >= ini : ahora >= ini && ahora < fin
+    } else if (t.fecha === ayer) {
+      dentro = cruzaMedianoche && ahora < fin
+    }
+    if (dentro) out.add(String(t.guardia_id))
+  }
+  return out
+}
+
 /**
  * ¿Es momento de mandar?
  *
