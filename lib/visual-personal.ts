@@ -22,88 +22,9 @@ import { esCuentaGalicia } from '@/lib/cuenta-banco'
 const normalizarCuentaGalicia = (c: string): string =>
   esCuentaGalicia(c) && c.length < 14 ? c.padStart(14, '0') : c
 
-const CAMPOS_DATOS = 'empleado_id, fecha_nacimiento, nacionalidad, fecha_ingreso, domicilio_calle, domicilio_numero, domicilio_piso_depto, domicilio_localidad, domicilio_provincia, domicilio_cp, contacto_emergencia_telefono, obra_social_nombre, obra_social_codigo'
-
-/**
- * Trae el personal para exportar a Visual: los ACTIVOS y, si `incluirBajas`, las
- * bajas confirmadas con liquidación final hecha (para inactivarlas en Visual con
- * su fecha de baja). Mezcla `usuarios`, `legajo_datos_personales`, el sueldo
- * mensual vigente y la fecha de baja. Sólo lee.
- */
-export async function cargarPersonalVisual(
-  client: any,
-  opts: { incluirBajas?: boolean } = {},
-): Promise<{ empleados: EmpleadoVisual[]; error: string | null }> {
-  const incluirBajas = opts.incluirBajas ?? true
-  // Activos
-  const { data: us, error: eu } = await client.from('usuarios')
-    .select('id, legajo, legajo_visual, apellido, nombre, cuil, dni, cuenta_bancaria, telefono, email, estado')
-    .eq('estado', 'activo').not('es_prueba', 'is', true)
-  if (eu) return { empleados: [], error: eu.message || String(eu) }
-  const activos = (us ?? []) as any[]
-
-  // Bajas confirmadas con final hecha → su usuario + fecha de baja
-  const bajaFecha = new Map<string, string>()
-  let usuariosBaja: any[] = []
-  if (incluirBajas) {
-    const { data: bajas } = await client.from('baja_laboral')
-      .select('empleado_id, fecha_baja, estado, final:liquidacion_final(estado)')
-      .eq('estado', 'confirmada')
-    for (const b of (bajas ?? []) as any[]) {
-      const finales = Array.isArray(b.final) ? b.final : (b.final ? [b.final] : [])
-      const liquidada = finales.some((f: any) => f && f.estado && f.estado !== 'anulada')
-      if (liquidada && b.empleado_id) bajaFecha.set(String(b.empleado_id), String(b.fecha_baja ?? ''))
-    }
-    const idsBaja = Array.from(bajaFecha.keys()).filter(id => !activos.some(a => String(a.id) === id))
-    if (idsBaja.length) {
-      const { data: ub } = await client.from('usuarios')
-        .select('id, legajo, legajo_visual, apellido, nombre, cuil, dni, cuenta_bancaria, telefono, email, estado')
-        .in('id', idsBaja)
-      usuariosBaja = (ub ?? []) as any[]
-    }
-  }
-
-  const todos = [...activos, ...usuariosBaja]
-  const ids = todos.map(u => String(u.id))
-  const datos = new Map<string, any>()
-  for (let i = 0; i < ids.length; i += 500) {
-    const { data: dd } = await client.from('legajo_datos_personales').select(CAMPOS_DATOS).in('empleado_id', ids.slice(i, i + 500))
-    for (const d of (dd ?? []) as any[]) datos.set(String(d.empleado_id), d)
-  }
-  // Sueldo mensual vigente (vigencia_hasta null) por usuario
-  const sueldo = new Map<string, number>()
-  for (let i = 0; i < ids.length; i += 500) {
-    const { data: ss } = await client.from('liquidacion_sueldo_mensual').select('usuario_id, importe, vigencia_desde, vigencia_hasta').in('usuario_id', ids.slice(i, i + 500)).is('vigencia_hasta', null)
-    for (const s of (ss ?? []) as any[]) {
-      const uid = String(s.usuario_id)
-      if (!sueldo.has(uid)) sueldo.set(uid, Number(s.importe))  // el más reciente lo ordena la caller si hace falta
-    }
-  }
-
-  const empleados: EmpleadoVisual[] = todos.map(u => {
-    const uid = String(u.id)
-    const d = datos.get(uid) ?? {}
-    return {
-      usuario_id: uid,
-      legajo: u.legajo ?? null, legajo_visual: u.legajo_visual ?? null,
-      apellido: u.apellido ?? null, nombre: u.nombre ?? null, cuil: u.cuil ?? null, dni: u.dni ?? null,
-      cuenta_bancaria: u.cuenta_bancaria ?? null, telefono: u.telefono ?? null, email: u.email ?? null,
-      fecha_nacimiento: d.fecha_nacimiento ?? null, nacionalidad: d.nacionalidad ?? null, fecha_ingreso: d.fecha_ingreso ?? null,
-      domicilio_calle: d.domicilio_calle ?? null, domicilio_numero: d.domicilio_numero ?? null,
-      domicilio_piso_depto: d.domicilio_piso_depto ?? null, domicilio_localidad: d.domicilio_localidad ?? null,
-      domicilio_provincia: d.domicilio_provincia ?? null, domicilio_cp: d.domicilio_cp ?? null,
-      contacto_emergencia_telefono: d.contacto_emergencia_telefono ?? null,
-      obra_social_nombre: d.obra_social_nombre ?? null, obra_social_codigo: d.obra_social_codigo ?? null,
-      sueldo_base: sueldo.has(uid) ? (sueldo.get(uid) as number) : null,
-      fecha_baja: bajaFecha.get(uid) ?? null,
-    }
-  })
-  // Activos primero (por apellido), después las bajas al final.
-  empleados.sort((a, b) =>
-    Number(Boolean(a.fecha_baja)) - Number(Boolean(b.fecha_baja)) ||
-    dc(a.apellido).localeCompare(dc(b.apellido)))
-  return { empleados, error: null }
-}
+// El fetch de datos (lee usuarios/legajo_datos_personales, con dni/cuil/cuenta)
+// vive en la ruta app/api/liquidaciones/personal-visual (service_role), para que
+// no quede un lector de PII de `usuarios` en código del cliente (guardrail F-06).
 
 // Encabezado EXACTO de la planilla de Visual (fila 4). El ORDEN importa: Visual
 // lee por posición de columna.
