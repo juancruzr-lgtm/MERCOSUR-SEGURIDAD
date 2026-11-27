@@ -343,7 +343,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
         setMsgPersonal({ ok: false, t: 'No se pudo generar la planilla de personal: ' + (j.error || resp.statusText) }); return
       }
       const buf = await resp.arrayBuffer()
-      descargarArchivo(buf, `PersonalVisual_${new Date().toISOString().slice(0, 10)}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      descargarArchivo(buf, `PersonalVisual_${new Date().toISOString().slice(0, 10)}.xls`, 'application/vnd.ms-excel')
       const act = resp.headers.get('X-Personal-Activos') ?? '?'
       const baj = Number(resp.headers.get('X-Personal-Bajas') ?? '0')
       const fal = Number(resp.headers.get('X-Personal-Faltantes') ?? '0')

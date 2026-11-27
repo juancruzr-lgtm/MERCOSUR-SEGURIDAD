@@ -94,8 +94,8 @@ export async function GET(req: NextRequest) {
   return new NextResponse(r.buffer, {
     status: 200,
     headers: {
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="PersonalVisual_${hoy}.xlsx"`,
+      'Content-Type': 'application/vnd.ms-excel',
+      'Content-Disposition': `attachment; filename="PersonalVisual_${hoy}.xls"`,
       'X-Personal-Activos': String(r.activos),
       'X-Personal-Bajas': String(r.bajas),
       'X-Personal-Faltantes': String(r.conFaltantes),
