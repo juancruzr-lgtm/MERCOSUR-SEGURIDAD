@@ -108,7 +108,7 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   // Export a Visual + validación pre-export
   const [genVisual, setGenVisual] = useState(false)
   const [validacion, setValidacion] = useState<any>(null)
-  const [genBanco, setGenBanco] = useState<'' | 'sueldos' | 'extras' | 'completo' | 'general'>('')
+  const [genBanco, setGenBanco] = useState<'' | 'sueldos' | 'extras' | 'completo' | 'general' | 'personal'>('')
   const [msgBanco, setMsgBanco] = useState<{ ok: boolean; t: string } | null>(null)
   // Último archivo de extras descargado (para registrarlo como pagado tras acreditarlo).
   const [ultimoExtras, setUltimoExtras] = useState<{ periodoId: string; nombre: string; buf: ArrayBuffer; rows: { cuenta: string; nombre: string; importe: number; usuarioId?: string }[]; total: number } | null>(null)
@@ -321,6 +321,35 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
       })
     } catch (e: any) {
       setMsgBanco({ ok: false, t: 'No se pudo generar el libro general: ' + (e?.message || e) })
+    } finally { setGenBanco('') }
+  }
+
+  // Planilla de importación de personal de Visual: personal ACTIVO + bajas ya
+  // liquidadas (con fecha de baja para inactivarlas). Va por API (admin) porque
+  // junta datos personales de varios legajos. Trae una hoja FALTANTES con los
+  // obligatorios que faltan, para ordenar los legajos.
+  async function descargarPersonalVisual() {
+    setGenBanco('personal'); setMsgBanco(null)
+    try {
+      const { data: sesion } = await supabase.auth.getSession()
+      const token = sesion.session?.access_token
+      if (!token) { setMsgBanco({ ok: false, t: 'Sesión no disponible: volvé a iniciar sesión.' }); return }
+      const resp = await fetch('/api/liquidaciones/personal-visual', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' })
+      if (!resp.ok) {
+        const j = await resp.json().catch(() => ({} as any))
+        setMsgBanco({ ok: false, t: 'No se pudo generar la planilla de personal: ' + (j.error || resp.statusText) }); return
+      }
+      const buf = await resp.arrayBuffer()
+      descargarArchivo(buf, `PersonalVisual_${new Date().toISOString().slice(0, 10)}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      const act = resp.headers.get('X-Personal-Activos') ?? '?'
+      const baj = Number(resp.headers.get('X-Personal-Bajas') ?? '0')
+      const fal = Number(resp.headers.get('X-Personal-Faltantes') ?? '0')
+      setMsgBanco({
+        ok: fal === 0,
+        t: `Planilla de personal para Visual: ${act} activo(s)${baj ? ` + ${baj} baja(s) a inactivar` : ''}. ${fal ? `⚠️ ${fal} con datos obligatorios faltantes (ver hoja FALTANTES del archivo).` : 'Sin faltantes.'}`,
+      })
+    } catch (e: any) {
+      setMsgBanco({ ok: false, t: 'No se pudo generar la planilla de personal: ' + (e?.message || e) })
     } finally { setGenBanco('') }
   }
 
@@ -689,6 +718,9 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                   </button>
                   <button style={{ ...S.btn, background: '#334155', opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarLibroGeneral()}>
                     {genBanco === 'general' ? 'Generando…' : '📚 Descargar libro general (todos los meses)'}
+                  </button>
+                  <button style={{ ...S.btn, background: '#0f766e', opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarPersonalVisual()} title="Planilla de importación de personal de Visual: activos + bajas ya liquidadas, con hoja de faltantes">
+                    {genBanco === 'personal' ? 'Generando…' : '👥 Exportar personal a Visual'}
                   </button>
                 </div>
                 {msgBanco && <div style={{ color: msgBanco.ok ? '#4ade80' : '#f87171', fontSize: 13, marginTop: 10 }}>{msgBanco.t}</div>}
