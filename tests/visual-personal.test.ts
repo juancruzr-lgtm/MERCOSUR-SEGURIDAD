@@ -29,8 +29,9 @@ describe('filaEmpleadoVisual', () => {
     expect(f[col('Fecha Nacimiento')]).toBe('14/03/1985') // dd/MM/yyyy
     expect(f[col('Fecha de Ingreso *')]).toBe('04/02/2024')
     expect(f[col('Sueldo Base *')]).toBe(500000)
-    expect(f[col('Obra Social')]).toBe('OSPSIP')
-    expect(f[col('Código OS')]).toBe('000406')
+    expect(f[col('Obra Social')]).toBe('')   // en blanco hasta mapear ARCA→Visual
+    expect(f[col('Código OS')]).toBe('')
+    expect(f[col('Provincia **')]).toBe('Corrientes') // mapeada a la lista de Visual
     expect(f[col('Forma de pago')]).toBe('Acreditación en cuenta')
     expect(f[col('Piso')]).toBe('2'); expect(f[col('Depto.')]).toBe('B')
   })
@@ -42,6 +43,14 @@ describe('filaEmpleadoVisual', () => {
     const cbu = filaEmpleadoVisual(base({ cuenta_bancaria: '0720237988000004763790' }))
     expect(cbu[col('CBU')]).toBe('0720237988000004763790')
     expect(cbu[col('Cuenta Bancaria')]).toBe('')
+  })
+
+  it('normaliza los campos validados que traban a Visual (provincia, nacionalidad)', () => {
+    expect(filaEmpleadoVisual(base({ domicilio_provincia: 'santa fe' }))[col('Provincia **')]).toBe('Santa Fe')
+    expect(filaEmpleadoVisual(base({ domicilio_provincia: 'Capital' }))[col('Provincia **')]).toBe('Capital Federal')
+    expect(filaEmpleadoVisual(base({ domicilio_provincia: 'Pelotas (Brasil)' }))[col('Provincia **')]).toBe('') // no matchea → vacío
+    expect(filaEmpleadoVisual(base({ nacionalidad: 'Argentino' }))[col('Nacionalidad **')]).toBe('ARGENTINA')
+    expect(filaEmpleadoVisual(base({ nacionalidad: 'Paraguaya' }))[col('Nacionalidad **')]).toBe('') // no argentina → vacío
   })
 
   it('un NUEVO (sin legajo de Visual) usa el apellido como legajo', () => {

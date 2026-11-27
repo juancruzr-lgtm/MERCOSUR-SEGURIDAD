@@ -54,6 +54,32 @@ const DEF = {
   formaPago: 'Acreditación en cuenta',
 }
 
+// Normaliza para comparar (sin acentos, minúsculas, sin espacios de más).
+const norm = (s: string): string =>
+  s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()
+
+// Provincias EXACTAS de la lista de Visual (col E de la Hoja2). Nuestra provincia
+// es texto libre ("Santa fe", "santa fe"…) y Visual la valida contra ESTA lista,
+// así que la mapeamos a la forma exacta; si no matchea, va vacía (Visual importa
+// igual y se completa después, mejor que trabar la fila).
+const PROVINCIAS_VISUAL = [
+  'Capital Federal', 'Buenos Aires', 'Catamarca', 'Chaco', 'Chubut', 'Córdoba', 'Corrientes',
+  'Entre Ríos', 'Formosa', 'Jujuy', 'La Pampa', 'La Rioja', 'Mendoza', 'Misiones', 'Neuquén',
+  'Río Negro', 'Salta', 'San Juan', 'San Luis', 'Santa Cruz', 'Santa Fe', 'Santiago del Estero',
+  'Tierra del Fuego', 'Tucumán',
+]
+const PROV_POR_NORM = new Map(PROVINCIAS_VISUAL.map(p => [norm(p), p]))
+const provinciaVisual = (v: string | null): string => {
+  const s = dc(v)
+  if (!s) return ''
+  if (/capital|caba|c\.?a\.?b\.?a|ciudad.*buenos aires/.test(norm(s))) return 'Capital Federal'
+  return PROV_POR_NORM.get(norm(s)) ?? ''
+}
+// Toda nuestra gente es argentina; el dato guardado viene inconsistente
+// ("Argentino"/"Argentina"). Si normaliza a argentin* → la forma exacta de Visual.
+const nacionalidadVisual = (v: string | null): string =>
+  norm(dc(v)).startsWith('argentin') || !dc(v) ? DEF.nacionalidad : ''
+
 export interface EmpleadoVisual {
   usuario_id: string
   legajo: string | null
@@ -136,7 +162,7 @@ export function filaEmpleadoVisual(e: EmpleadoVisual): (string | number)[] {
   fila[6] = DEF.estadoCivil
   fila[7] = fechaVisual(e.fecha_nacimiento)
   fila[8] = DEF.genero
-  fila[9] = dc(e.nacionalidad) || DEF.nacionalidad
+  fila[9] = nacionalidadVisual(e.nacionalidad)
   fila[10] = fechaVisual(e.fecha_ingreso)
   fila[11] = e.sueldo_base != null ? e.sueldo_base : ''
   fila[12] = dc(e.domicilio_calle)
@@ -145,7 +171,7 @@ export function filaEmpleadoVisual(e: EmpleadoVisual): (string | number)[] {
   fila[15] = depto
   fila[16] = dc(e.domicilio_cp)
   fila[17] = dc(e.domicilio_localidad)
-  fila[18] = dc(e.domicilio_provincia)
+  fila[18] = provinciaVisual(e.domicilio_provincia)
   fila[19] = dc(e.telefono)
   fila[20] = dc(e.contacto_emergencia_telefono)
   fila[21] = ''                       // Celular: hoy sólo guardamos un teléfono
@@ -153,8 +179,12 @@ export function filaEmpleadoVisual(e: EmpleadoVisual): (string | number)[] {
   fila[26] = esGalicia ? normalizarCuentaGalicia(cuenta) : (esCbu ? '' : cuenta)
   fila[27] = esCbu ? cuenta : ''      // CBU va aparte (22 dígitos)
   fila[30] = fechaVisual(e.fecha_baja) // sólo bajas ya liquidadas
-  fila[50] = dc(e.obra_social_nombre)
-  fila[51] = dc(e.obra_social_codigo)
+  // Obra Social (** validada contra la lista de 456 de Visual con su código):
+  // nuestros nombres/códigos vienen de ARCA y no coinciden con los de Visual, así
+  // que un valor que no esté en la lista TRABA la importación. Se dejan vacíos
+  // hasta tener el mapeo ARCA→Visual; se completan en Visual.
+  fila[50] = ''
+  fila[51] = ''
   fila[54] = DEF.formaPago
   return fila
 }
@@ -209,7 +239,8 @@ export async function escribirPlanillaPersonalVisual(empleados: EmpleadoVisual[]
   const fAoa: (string | number)[][] = [['Legajo', 'Empleado', 'Campos obligatorios que faltan']]
   for (const f of faltantes) fAoa.push([f.legajo, f.nombre, f.faltan.join(', ')])
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(fAoa), 'FALTANTES')
-  // .xls (BIFF8): Visual importa en formato Excel 97-2003, no .xlsx.
+  // bookType 'xls': es el que la importación de personal de Visual ABRE (probado
+  // 27/11). Con 'biff8' Visual dice "no se puede abrir". No cambiar sin reprobar.
   const buffer = XLSX.write(wb, { bookType: 'xls', type: 'array' }) as ArrayBuffer
   return {
     buffer,
