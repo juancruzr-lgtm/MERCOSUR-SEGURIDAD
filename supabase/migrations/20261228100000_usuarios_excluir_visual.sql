@@ -8,3 +8,8 @@ ALTER TABLE public.usuarios
 
 COMMENT ON COLUMN public.usuarios.excluir_visual IS
   'true = no se exporta a la planilla de personal de Visual (no es personal liquidado por Visual).';
+
+-- La base revoca SELECT de `usuarios` a authenticated y re-concede sólo columnas
+-- no-económicas (ver 20261207100100). La columna nueva se agrega a esa concesión
+-- para que los lectores del cliente (COLUMNAS_USUARIO) la puedan leer.
+GRANT SELECT (excluir_visual) ON public.usuarios TO authenticated;

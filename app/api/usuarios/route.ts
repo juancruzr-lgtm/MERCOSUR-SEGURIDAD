@@ -105,6 +105,9 @@ function armarPayload(
   // caller no debe mandarlo (la UI manda false por defecto y el update falla
   // recién ahí, con mensaje claro de Postgres).
   if (body.es_prueba !== undefined) payload.es_prueba = Boolean(body.es_prueba)
+  // "Lleva recibo" (va a Visual) es la inversa de excluir_visual; la UI manda el
+  // booleano ya resuelto. Clasificación operativa, no económica: sin gate extra.
+  if (body.excluir_visual !== undefined) payload.excluir_visual = Boolean(body.excluir_visual)
 
   return { payload }
 }
