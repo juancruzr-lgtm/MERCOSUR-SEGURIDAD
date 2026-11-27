@@ -4,6 +4,7 @@
 // ritmo se agota. Al tocar una se ve el detalle por mes y objetivo y se editan los objetivos ligados.
 import { useEffect, useMemo, useState } from 'react'
 import { leer, rpc } from '@/lib/facturacion/datos'
+import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { diasEntre } from '@/lib/facturacion/estado-cobro'
 import { S, fecha, pesos, useAccion } from './comun'
 
@@ -99,7 +100,24 @@ function Detalle({ l, objetivos, alCambiar }: { l: any; objetivos: any[]; alCamb
     previas: l.horas_previas ? String(l.horas_previas) : '', previas_hasta: l.horas_previas_hasta ?? '', previas_nota: l.horas_previas_nota ?? '' })
   const [filtro, setFiltro] = useState('')
   const { ocupado, correr, Mensaje } = useAccion()
-  useEffect(() => { correr(async () => setD(await rpc('fact_licitacion_detalle', { p_oc_id: l.id }))) }, [l.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Presupuesto en pesos: facturas descontadas de la OC (desde la app o cargadas acá) y facturas del cliente para descontar.
+  const [consumos, setConsumos] = useState<any[]>([])
+  const [facturasCliente, setFacturasCliente] = useState<any[]>([])
+  const [aDescontar, setADescontar] = useState('')
+  async function cargarPresupuesto() {
+    const [c, k] = await Promise.all([
+      leer('fact_oc_consumos', q => q.eq('oc_id', l.id).order('created_at'), 'id, total_c, neto_c, anulado_at, anulado_motivo, comprobante_id, prefactura_id, created_at'),
+      leer('fact_comprobantes', q => q.eq('cliente_id', l.cliente_id).eq('ambiente', 'produccion').not('tipo', 'in', '(3,8,13,53,203,208,213)').order('fecha_emision', { ascending: false }).limit(60),
+        'id, tipo, punto_venta, numero, fecha_emision, total_c, prefactura_id'),
+    ])
+    setConsumos(c); setFacturasCliente(k)
+  }
+  useEffect(() => { correr(async () => { setD(await rpc('fact_licitacion_detalle', { p_oc_id: l.id })); await cargarPresupuesto() }) }, [l.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  const nvk = (k: any) => numeroVisible({ tipo: k.tipo, puntoVenta: k.punto_venta, numero: Number(k.numero) })
+  const vigentes = consumos.filter(c => !c.anulado_at)
+  const usadoPres = vigentes.reduce((a, c) => a + Number(l.monto_total_c != null ? c.total_c : c.neto_c), 0)
+  const montoPres = Number(l.monto_total_c ?? l.monto_neto_c ?? 0)
+  const yaDescontada = (k: any) => vigentes.some(c => c.comprobante_id === k.id || (k.prefactura_id && c.prefactura_id === k.prefactura_id))
 
   const meses = useMemo(() => Array.from(new Set([...(d?.turnos ?? []).map(t => t.mes), ...(d?.facturado ?? []).map(f => f.mes)])).sort(), [d])
   const objs = useMemo(() => Array.from(new Map((d?.turnos ?? []).map(t => [t.objetivo_id, t.objetivo])).entries()), [d])
@@ -150,6 +168,30 @@ function Detalle({ l, objetivos, alCambiar }: { l: any; objetivos: any[]; alCamb
             <input type="checkbox" checked={sel.includes(o.id)} onChange={e => setSel(e.target.checked ? [...sel, o.id] : sel.filter(x => x !== o.id))} /> {o.nombre} <span style={S.sub}>{o.cliente ?? ''}</span></label>)}
         </div>
         <button style={{ ...S.btn, marginTop: 6 }} disabled={ocupado} onClick={guardar}>Guardar</button>
+      </div>}
+
+      {montoPres > 0 && <div style={{ marginTop: 10 }}>
+        <h4 style={S.sub}>PRESUPUESTO {l.monto_total_c != null ? '(CON IVA)' : '(NETO)'}: {pesos(montoPres)} · usado {pesos(usadoPres)} · <span style={{ color: montoPres - usadoPres < 0 ? '#f87171' : '#4ade80' }}>queda {pesos(montoPres - usadoPres)}</span></h4>
+        {l.condiciones && <div style={{ ...S.sub, whiteSpace: 'pre-wrap' }}>{l.condiciones}</div>}
+        {consumos.map(c => { const k = facturasCliente.find(x => x.id === c.comprobante_id || (c.prefactura_id && x.prefactura_id === c.prefactura_id))
+          return <div key={c.id} style={{ ...S.fila, fontSize: 13, opacity: c.anulado_at ? 0.5 : 1 }}>
+            {k ? `${nvk(k)} · ${fecha(k.fecha_emision)}` : 'Factura de la app'} · <b>{pesos(l.monto_total_c != null ? c.total_c : c.neto_c)}</b>
+            {c.anulado_at ? <span style={S.sub}> · anulado: {c.anulado_motivo ?? ''}</span>
+              : c.comprobante_id && <button style={{ ...S.btnPeligro, padding: '1px 6px' }} disabled={ocupado} onClick={() => {
+                const m = prompt('Quitar esta factura del presupuesto de la OC (queda en el historial). Motivo:')
+                if (m) correr(async () => { await rpc('fact_oc_consumo_anular', { p_id: c.id, p_motivo: m }); await cargarPresupuesto(); alCambiar() }, 'Quitada del presupuesto')
+              }}>Quitar</button>}
+          </div> })}
+        <div style={{ ...S.fila, marginTop: 4 }}>
+          <select style={{ ...S.input, minWidth: 260 }} value={aDescontar} onChange={e => setADescontar(e.target.value)}>
+            <option value="">Descontar una factura del cliente…</option>
+            {facturasCliente.filter(k => !yaDescontada(k)).map(k => <option key={k.id} value={k.id}>{nvk(k)} · {fecha(k.fecha_emision)} · {pesos(k.total_c)}</option>)}
+          </select>
+          <button style={S.btn2} disabled={ocupado || !aDescontar} onClick={() => correr(async () => {
+            await rpc('fact_oc_consumo_comprobante', { p_oc_id: l.id, p_comprobante_id: aDescontar }); setADescontar(''); await cargarPresupuesto(); alCambiar()
+          }, 'Factura descontada del presupuesto')}>Descontar</button>
+        </div>
+        <div style={S.sub}>Sirve para facturas hechas por fuera de la app o para clientes que dan un presupuesto en pesos (por ejemplo, INTA).</div>
       </div>}
 
       <h4 style={{ ...S.sub, marginTop: 10 }}>HORAS POR MES Y OBJETIVO</h4>
