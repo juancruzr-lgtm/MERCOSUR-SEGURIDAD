@@ -108,8 +108,11 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   // Export a Visual + validación pre-export
   const [genVisual, setGenVisual] = useState(false)
   const [validacion, setValidacion] = useState<any>(null)
-  const [genBanco, setGenBanco] = useState<'' | 'sueldos' | 'extras' | 'completo' | 'general' | 'personal'>('')
+  const [genBanco, setGenBanco] = useState<'' | 'sueldos' | 'extras' | 'completo' | 'general'>('')
   const [msgBanco, setMsgBanco] = useState<{ ok: boolean; t: string } | null>(null)
+  // Exportar personal a Visual: acción GENERAL (no depende de período), arriba.
+  const [genPersonal, setGenPersonal] = useState(false)
+  const [msgPersonal, setMsgPersonal] = useState<{ ok: boolean; t: string } | null>(null)
   // Último archivo de extras descargado (para registrarlo como pagado tras acreditarlo).
   const [ultimoExtras, setUltimoExtras] = useState<{ periodoId: string; nombre: string; buf: ArrayBuffer; rows: { cuenta: string; nombre: string; importe: number; usuarioId?: string }[]; total: number } | null>(null)
   // Banner READ-ONLY: cambios operativos posteriores al archivo enviado a Visual.
@@ -329,28 +332,28 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
   // junta datos personales de varios legajos. Trae una hoja FALTANTES con los
   // obligatorios que faltan, para ordenar los legajos.
   async function descargarPersonalVisual() {
-    setGenBanco('personal'); setMsgBanco(null)
+    setGenPersonal(true); setMsgPersonal(null)
     try {
       const { data: sesion } = await supabase.auth.getSession()
       const token = sesion.session?.access_token
-      if (!token) { setMsgBanco({ ok: false, t: 'Sesión no disponible: volvé a iniciar sesión.' }); return }
+      if (!token) { setMsgPersonal({ ok: false, t: 'Sesión no disponible: volvé a iniciar sesión.' }); return }
       const resp = await fetch('/api/liquidaciones/personal-visual', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' })
       if (!resp.ok) {
         const j = await resp.json().catch(() => ({} as any))
-        setMsgBanco({ ok: false, t: 'No se pudo generar la planilla de personal: ' + (j.error || resp.statusText) }); return
+        setMsgPersonal({ ok: false, t: 'No se pudo generar la planilla de personal: ' + (j.error || resp.statusText) }); return
       }
       const buf = await resp.arrayBuffer()
       descargarArchivo(buf, `PersonalVisual_${new Date().toISOString().slice(0, 10)}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       const act = resp.headers.get('X-Personal-Activos') ?? '?'
       const baj = Number(resp.headers.get('X-Personal-Bajas') ?? '0')
       const fal = Number(resp.headers.get('X-Personal-Faltantes') ?? '0')
-      setMsgBanco({
+      setMsgPersonal({
         ok: fal === 0,
         t: `Planilla de personal para Visual: ${act} activo(s)${baj ? ` + ${baj} baja(s) a inactivar` : ''}. ${fal ? `⚠️ ${fal} con datos obligatorios faltantes (ver hoja FALTANTES del archivo).` : 'Sin faltantes.'}`,
       })
     } catch (e: any) {
-      setMsgBanco({ ok: false, t: 'No se pudo generar la planilla de personal: ' + (e?.message || e) })
-    } finally { setGenBanco('') }
+      setMsgPersonal({ ok: false, t: 'No se pudo generar la planilla de personal: ' + (e?.message || e) })
+    } finally { setGenPersonal(false) }
   }
 
   async function crearPeriodo() {
@@ -497,6 +500,23 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
         <button style={tabStyle(tab === 'catalogo')} onClick={() => setTab('catalogo')}>Catálogo de conceptos</button>
         <button style={tabStyle(tab === 'permanentes')} onClick={() => setTab('permanentes')}>Permanentes</button>
       </div>
+
+      {/* Acción GENERAL (no depende de un período): exportar el personal vigente
+          a Visual. Va arriba porque el alta se hace primero en la app + AFIP y
+          después en Visual. */}
+      <div style={{ ...S.card, borderColor: '#0f766e', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <strong>👥 Personal → Visual</strong>
+          <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 2 }}>
+            Exporta el <b>personal vigente</b> (activos + bajas ya liquidadas, con su fecha de baja) a la planilla de importación de Visual. Incluye una hoja <b>FALTANTES</b> con los datos obligatorios que falten. No depende de ningún período.
+          </div>
+          {msgPersonal && <div style={{ color: msgPersonal.ok ? '#4ade80' : '#f87171', fontSize: 13, marginTop: 8 }}>{msgPersonal.t}</div>}
+        </div>
+        <button style={{ ...S.btn, background: '#0f766e', opacity: genPersonal ? 0.6 : 1, whiteSpace: 'nowrap' }} disabled={genPersonal} onClick={() => void descargarPersonalVisual()}>
+          {genPersonal ? 'Generando…' : '👥 Exportar personal a Visual'}
+        </button>
+      </div>
+
       {msg && <div style={{ ...(msg.ok ? S.ok : S.err), marginBottom: 10 }}>{msg.t}</div>}
 
       {tab === 'periodos' && (
@@ -718,9 +738,6 @@ export default function LiquidacionPanel({ user, empleados }: { user: any; emple
                   </button>
                   <button style={{ ...S.btn, background: '#334155', opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarLibroGeneral()}>
                     {genBanco === 'general' ? 'Generando…' : '📚 Descargar libro general (todos los meses)'}
-                  </button>
-                  <button style={{ ...S.btn, background: '#0f766e', opacity: genBanco ? 0.6 : 1 }} disabled={!!genBanco} onClick={() => void descargarPersonalVisual()} title="Planilla de importación de personal de Visual: activos + bajas ya liquidadas, con hoja de faltantes">
-                    {genBanco === 'personal' ? 'Generando…' : '👥 Exportar personal a Visual'}
                   </button>
                 </div>
                 {msgBanco && <div style={{ color: msgBanco.ok ? '#4ade80' : '#f87171', fontSize: 13, marginTop: 10 }}>{msgBanco.t}</div>}
