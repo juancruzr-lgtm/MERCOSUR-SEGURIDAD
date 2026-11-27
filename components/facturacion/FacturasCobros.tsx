@@ -206,9 +206,9 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, cobrosLibres, recla
   const [retsFactura, setRetsFactura] = useState<any[]>([])
   // Id del cobro generado en la pantalla: si el alta se reintenta, el servidor devuelve el mismo cobro.
   const idPago = useRef(crypto.randomUUID())
-  const [pago, setPago] = useState({ fecha: fechaArgentina(), importe: importeTexto(Math.max(0, Number(f.saldo_c))), medio: 'transferencia', referencia: `Pago ${f.nv}`, cheque_numero: '', cheque_banco: '', cheque_fecha_pago: '' })
+  const [pago, setPago] = useState({ fecha: fechaArgentina(), importe: '', medio: 'transferencia', referencia: `Pago ${f.nv}`, cheque_numero: '', cheque_banco: '', cheque_fecha_pago: '' })
   // Retenciones de este pago: una línea por impuesto (con o sin número de certificado) o un total sin detalle.
-  const [modo, setModo] = useState<'nuevo' | 'existente'>(cobrosLibres.length ? 'existente' : 'nuevo')
+  const [modo, setModo] = useState<'nuevo' | 'existente' | 'retenciones'>(Number(f.aplicado_c) > 0 ? 'retenciones' : cobrosLibres.length ? 'existente' : 'nuevo')
   const [cobroUsado, setCobroUsado] = useState('')
   const [rets, setRets] = useState<Array<{ impuesto: string; certificado: string; importe: string }>>([])
   const { ocupado, correr, Mensaje } = useAccion()
@@ -265,17 +265,18 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, cobrosLibres, recla
         {saldo > 0 && f.cliente_id && (() => {
           const usado = cobrosLibres.find(c => c.id === cobroUsado)
           const pedido = centavosDe(pago.importe) || 0
-          const neto = modo === 'existente' ? (usado ? Math.min(Number(usado.disponible_c), pedido || Number(usado.disponible_c)) : 0) : pedido
+          const neto = modo === 'retenciones' ? 0 : modo === 'existente' ? (usado ? Math.min(Number(usado.disponible_c), pedido || Number(usado.disponible_c)) : 0) : pedido
           const retTotal = rets.reduce((a, r) => a + (centavosDe(r.importe) || 0), 0)
           const conCert = rets.filter(r => r.certificado.trim()).reduce((a, r) => a + (centavosDe(r.importe) || 0), 0)
           const queda = saldo - neto - retTotal
           return <div>
             <h4 style={S.sub}>REGISTRAR PAGO DE ESTA FACTURA (saldo {pesos(saldo)})</h4>
             <div style={S.fila}>
+              <label style={S.sub}><input type="radio" checked={modo === 'retenciones'} onChange={() => setModo('retenciones')} /> Sólo retenciones (el pago ya está cargado)</label>
               <label style={S.sub}><input type="radio" checked={modo === 'nuevo'} onChange={() => setModo('nuevo')} /> Pago nuevo</label>
               <label style={S.sub}><input type="radio" checked={modo === 'existente'} disabled={!cobrosLibres.length} onChange={() => setModo('existente')} /> Usar un cobro ya cargado sin asignar ({cobrosLibres.length})</label>
             </div>
-            {modo === 'existente' ? <div style={{ ...S.fila, marginTop: 6 }}>
+            {modo === 'retenciones' ? null : modo === 'existente' ? <div style={{ ...S.fila, marginTop: 6 }}>
               <select style={{ ...S.input, flex: 1 }} value={cobroUsado} onChange={e => {
                 setCobroUsado(e.target.value)
                 const c = cobrosLibres.find(x => x.id === e.target.value)
