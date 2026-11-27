@@ -175,6 +175,11 @@ const OBLIGATORIOS: { campo: keyof EmpleadoVisual; etiqueta: string }[] = [
 
 const dc = (v: unknown): string => (v == null ? '' : String(v)).trim()
 
+// Legajo de Visual = APELLIDO NOMBRE (convención de la empresa, JC 27/11). El
+// campo `legajo_visual` guardado está sucio/inconsistente (a veces sólo apellido,
+// truncado o null), así que se arma siempre desde apellido + nombre.
+const legajoDe = (e: EmpleadoVisual): string => [dc(e.apellido), dc(e.nombre)].filter(Boolean).join(' ').toUpperCase()
+
 // Fecha ISO (yyyy-mm-dd) → dd/MM/yyyy (formato Visual). Deja intacto lo que no
 // matchee para no romper un valor ya formateado.
 function fechaVisual(v: string | null): string {
@@ -200,7 +205,7 @@ export function filaEmpleadoVisual(e: EmpleadoVisual): (string | number)[] {
   const esGalicia = esCuentaGalicia(cuenta)
   const { piso, depto } = pisoDepto(e.domicilio_piso_depto)
   const fila = new Array<string | number>(COLUMNAS_VISUAL.length).fill('')
-  fila[0] = dc(e.legajo_visual) || dc(e.legajo)
+  fila[0] = legajoDe(e)
   fila[1] = dc(e.apellido)
   fila[2] = dc(e.nombre)
   fila[3] = dc(e.cuil)
@@ -266,7 +271,7 @@ export async function escribirPlanillaPersonalVisual(empleados: EmpleadoVisual[]
     if (dc(e.fecha_baja)) bajas++
     aoa.push(filaEmpleadoVisual(e))
     const faltan = faltantesDe(e)
-    if (faltan.length) faltantes.push({ legajo: dc(e.legajo_visual) || dc(e.legajo), nombre: `${dc(e.apellido)}, ${dc(e.nombre)}`, faltan })
+    if (faltan.length) faltantes.push({ legajo: legajoDe(e), nombre: `${dc(e.apellido)}, ${dc(e.nombre)}`, faltan })
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa)
   // Legajo, CUIL, DNI y cuenta como TEXTO (conservan ceros a la izquierda).

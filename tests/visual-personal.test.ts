@@ -20,7 +20,7 @@ const col = (h: string) => COLUMNAS_VISUAL.indexOf(h)
 describe('filaEmpleadoVisual', () => {
   it('mapea los campos en la posición correcta y aplica los defaults de JC', () => {
     const f = filaEmpleadoVisual(base())
-    expect(f[col('Legajo *')]).toBe('ALMADA')           // legajo_visual gana
+    expect(f[col('Legajo *')]).toBe('ALMADA ESTANISLAO') // APELLIDO NOMBRE (convención empresa)
     expect(f[col('Cuil *')]).toBe('20144945817')
     expect(f[col('Tipo Doc. **')]).toBe('DNI')
     expect(f[col('Estado Civil **')]).toBe('Soltero/a')  // default
