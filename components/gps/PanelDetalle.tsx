@@ -13,7 +13,7 @@
 //
 
 import { useEffect, useState } from 'react'
-import { urlFotoReferencia, etiquetaDiagnostico, proponeCambio, type PuntoRondaGps } from '@/lib/gps-mapa'
+import { urlFotoReferencia, etiquetaDiagnostico, proponeCambio, textoIncumplimientos, type PuntoRondaGps } from '@/lib/gps-mapa'
 import {
   etiquetaConfianza,
   etiquetaOrigenVigencia,
@@ -490,14 +490,13 @@ export default function PanelDetalle({
             <Fila label="Coordenadas" valor={coordenada(p.latitud, p.longitud)} />
             <Fila label="Radio actual" valor={p.radioMetros !== null ? `${p.radioMetros} m` : '—'} />
             <Fila label="GPS requerido" valor={p.gpsRequerido ? 'Sí' : 'No'} />
+            {/* null = la racha no se pudo leer: se dice, no se muestra "ninguno". */}
             <Fila
-              label="Incumplimientos seguidos"
-              valor={p.incumplimientosConsecutivos > 0
-                ? `${p.incumplimientosConsecutivos}`
-                : 'ninguno'}
+              label="Fuera del radio seguidos"
+              valor={textoIncumplimientos(p.incumplimientosConsecutivos)}
             />
-            {p.fotoControlProximaVisita && (
-              <Fila label="Próxima visita" valor="Exige foto de control" />
+            {p.fotoControlProximaVisita === true && (
+              <Fila label="Próxima visita" valor="Se pide foto de control" />
             )}
             <Fila label="Foto de referencia" valor={p.referenciaId ? 'Tiene' : 'No tiene'} />
 

@@ -197,8 +197,8 @@ function PuntoDetalle({ punto }: { punto: PuntoEjecucionDetalle }) {
             {/* Distingue la foto automática de la configurada: esta visita nació
                 con verificación por reincidencia GPS. */}
             {punto.foto_control_gps && (
-              <span style={{ ...S.estadoChip, ...S.chipControl }} title="Foto obligatoria de control por reiteración de registros fuera del radio">
-                Foto de control GPS
+              <span style={{ ...S.estadoChip, ...S.chipControl }} title="Se pidió foto de control por reiteración de registros fuera del radio (pedido, no bloqueo)">
+                {punto.foto_ok ? 'Foto de control GPS entregada' : 'Foto de control GPS pedida, sin foto'}
               </span>
             )}
             {conQr && (
