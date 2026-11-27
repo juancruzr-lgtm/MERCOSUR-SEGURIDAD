@@ -8,7 +8,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { api, leer, rpc } from '@/lib/facturacion/datos'
 import { numeroVisible } from '@/lib/facturacion/comprobantes'
 import { ETIQUETA_ESTADO, conVencimiento, detalleVencimiento, estadoCobro, vencimientoDe, type CondicionesPago, type EstadoCobro } from '@/lib/facturacion/estado-cobro'
-import { cargarCondicionesPago } from '@/lib/facturacion/condiciones-pago'
+import { cargarCondicionesPago, leerTodo } from '@/lib/facturacion/condiciones-pago'
 import { totalIntereses, useIntereses, type InteresFactura } from '@/lib/facturacion/intereses-cobranzas'
 import { fechaArgentina } from '@/lib/periodo-argentina'
 import { S, centavosDe, fecha, pesos, useAccion } from './comun'
@@ -46,13 +46,14 @@ export default function FacturasCobros({ alVerCliente }: { alVerCliente: (client
     // Reclamos: si la tabla todavía no existe (migración sin aplicar) la pantalla sigue andando sin ellos.
     leer('fact_reclamos', q => q.is('anulado_at', null).order('fecha', { ascending: false }).limit(5000)).then(setReclamos).catch(() => setReclamos([]))
     const [s, c, a, co, cnd] = await Promise.all([
-      leer('fact_v_saldos', q => q.order('fecha_emision').order('punto_venta').order('numero').limit(5000)),
+      leerTodo('fact_v_saldos', '*', 'comprobante_id'),
       leer('fact_clientes', q => q.order('razon_social'), 'id, razon_social, cuit'),
-      leer('fact_aplicaciones', q => q.is('revertida_at', null).limit(10000), 'id, cobro_id, retencion_id, comprobante_id, importe_c, created_at'),
-      leer('fact_cobros', q => q.is('anulado_at', null).limit(10000), 'id, cliente_id, fecha, medio, importe_c, referencia, cheque_numero, cheque_banco, cheque_estado'),
+      leerTodo('fact_aplicaciones', 'id, cobro_id, retencion_id, comprobante_id, importe_c, created_at', 'id', q => q.is('revertida_at', null)),
+      leerTodo('fact_cobros', 'id, cliente_id, fecha, medio, importe_c, referencia, cheque_numero, cheque_banco, cheque_estado', 'id', q => q.is('anulado_at', null)),
       cargarCondicionesPago(),
     ])
     // Vencimiento según el contrato vigente: si cambia el plazo, cambia solo.
+    s.sort((a: any, b: any) => String(a.fecha_emision).localeCompare(String(b.fecha_emision)) || Number(a.punto_venta) - Number(b.punto_venta) || Number(a.numero) - Number(b.numero))
     setFilas(conVencimiento(s, cnd)); setCond(cnd); setClientes(c); setAps(a); setCobros(co)
   }
   useEffect(() => { correr(cargar) }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -321,25 +322,27 @@ function DetalleFactura({ f, nombreCliente, aps, cobroPorId, cobrosLibres, recla
               {retTotal > conCert && <div style={S.sub}>Las retenciones sin número quedan como estimadas: la factura figura cobrada, faltan retenciones, y no cuenta como deuda.</div>}
             </div>
             <div style={{ ...S.fila, marginTop: 6 }}>
-              <button style={S.btn} disabled={ocupado || neto <= 0 || queda < 0 || (modo === 'existente' && !usado)} onClick={() => correr(async () => {
-                if (modo === 'nuevo' && !pago.fecha) throw new Error('Completá la fecha')
-                let cobroId = usado?.id
-                if (modo === 'nuevo') cobroId = await rpc('fact_cobro_registrar', { p_datos: { ...pago, id: idPago.current, cliente_id: f.cliente_id, importe_c: neto } })
-                await rpc('fact_aplicar', { p_origen_tipo: 'cobro', p_origen_id: cobroId, p_comprobante_id: f.comprobante_id, p_saldo_inicial_id: null, p_importe_c: neto, p_evidencia: { manual: true, desde: 'facturas y cobros' } })
+              <button style={S.btn} disabled={ocupado || queda < 0 || (neto <= 0 && retTotal <= 0)} onClick={() => correr(async () => {
+                if (neto > 0) {
+                  if (modo === 'nuevo' && !pago.fecha) throw new Error('Completá la fecha')
+                  let cobroId = usado?.id
+                  if (modo === 'nuevo') cobroId = await rpc('fact_cobro_registrar', { p_datos: { ...pago, id: idPago.current, cliente_id: f.cliente_id, importe_c: neto } })
+                  await rpc('fact_aplicar', { p_origen_tipo: 'cobro', p_origen_id: cobroId, p_comprobante_id: f.comprobante_id, p_saldo_inicial_id: null, p_importe_c: neto, p_evidencia: { manual: true, desde: 'facturas y cobros' } })
+                }
                 for (const r of rets) {
                   const imp = centavosDe(r.importe); if (!imp || imp <= 0) continue
                   const cert = r.certificado.trim()
                   const retId = await rpc('fact_retencion_registrar', { p_datos: {
-                    cliente_id: f.cliente_id, impuesto: r.impuesto, certificado: cert, fecha: modo === 'existente' && usado ? usado.fecha : pago.fecha, importe_c: imp,
+                    cliente_id: f.cliente_id, impuesto: r.impuesto, certificado: cert, fecha: modo === 'existente' && usado ? usado.fecha : (pago.fecha || fechaArgentina()), importe_c: imp,
                     orden_pago: pago.referencia, comprobante_citado_id: f.comprobante_id, estado: cert ? 'certificado_recibido' : 'estimada',
                     notas: cert ? null : 'Cargada sin número de certificado desde el detalle de la factura' } })
                   if (cert) await rpc('fact_aplicar', { p_origen_tipo: 'retencion', p_origen_id: retId, p_comprobante_id: f.comprobante_id, p_saldo_inicial_id: null, p_importe_c: imp, p_evidencia: { certificado: cert, desde: 'facturas y cobros' } })
                 }
                 idPago.current = crypto.randomUUID(); setPago(p => ({ ...p, importe: '', referencia: '' })); setRets([]); setCobroUsado('')
                 alCambiar()
-              }, 'Pago y retenciones registrados')}>Registrar</button>
+              }, neto > 0 ? 'Pago y retenciones registrados' : 'Retenciones registradas')}>{neto > 0 ? 'Registrar' : 'Registrar sólo retenciones'}</button>
             </div>
-            <div style={{ ...S.sub, marginTop: 4 }}>Cobrado = lo que entró al banco (neto). Las retenciones van abajo, cada una con su certificado si lo tenés.</div>
+            <div style={{ ...S.sub, marginTop: 4 }}>Cobrado = lo que entró al banco (neto). Las retenciones van abajo, cada una con su certificado si lo tenés. Si el pago ya está aplicado, dejá el cobro vacío y cargá sólo las retenciones.</div>
           </div>
         })()}
       </div>
